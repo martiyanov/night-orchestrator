@@ -1,0 +1,29 @@
+{
+  "$comment": "Project registry: what the orchestrator may touch. repo = your git checkout; worktree_root = where task worktrees live; forbidden_paths/guard_roots = jail boundaries; bootstrap = docs seeded to every executor.",
+  "example-project": {
+    "repo": "$HOME/src/example-project",
+    "protected_checkout": false,
+    "worktree_root": "$HOME/worktrees/example",
+    "default_branch": "main",
+    "bootstrap": [
+      "README.md"
+    ],
+    "test_command": "python3 -m pytest -q",
+    "test_venv_dir": "",
+    "forbidden_paths": [
+      ".env",
+      ".env.*",
+      "data/",
+      "ops/deploy*"
+    ],
+    "guard_roots": [
+      "/srv/example-prod"
+    ],
+    "forbidden_operations": [
+      "git push",
+      "merge into default branch",
+      "production deploy",
+      "docker/systemctl control"
+    ]
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Night Orchestrator TASK",
+  "type": "object",
+  "required": ["project", "task_id", "goal", "risk", "mode", "allowed_paths", "forbidden_paths", "bootstrap", "checks", "owner_gates"],
+  "additionalProperties": false,
+  "properties": {
+    "project": { "type": "string", "minLength": 1 },
+    "task_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$" },
+    "goal": { "type": "string", "minLength": 1 },
+    "risk": { "enum": ["LOW", "MEDIUM", "HIGH"] },
+    "mode": { "enum": ["read_only", "writable"] },
+    "allowed_paths": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "$comment": "glob patterns relative to repo root; empty array for read_only tasks"
+    },
+    "forbidden_paths": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "bootstrap": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "checks": {
+      "type": "array",
+      "$comment": "task-specific deterministic checks; each is a shell command string run in jail",
+      "items": {
+        "type": "object",
+        "required": ["name", "command"],
+        "properties": {
+          "name": { "type": "string" },
+          "command": { "type": "string" },
+          "timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 1800 }
+        }
+      }
+    },
+    "owner_gates": {
+      "type": "array",
+      "$comment": "conditions that require explicit owner decision before proceeding; if task succeeds and these are non-empty, status becomes OWNER_GATE",
+      "items": { "type": "string" }
+    },
+    "requires_full_offline_gate": { "type": "boolean", "default": false },
+    "cleanup_worktree": { "type": "boolean", "default": false, "$comment": "writable only: orchestrator removes worktree+branch after the task finishes (disposable tasks)" },
+    "explicit_review_trigger": { "type": "boolean", "default": false, "$comment": "required=true to allow openai/gpt-5.6-sol independent review on HIGH tasks" },
+    "notes": { "type": "string" }
+  }
+}

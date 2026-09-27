@@ -1,0 +1,22 @@
+# секреты и локальные конфигурации
+.env
+.env.*
+config/credentials*
+config/permissions.json
+config/routing.json
+config/projects.json
+config/report.json
+# рабочие данные
+runs/
+intake/
+logs/
+*.log
+*.db
+*.db-wal
+*.db-shm
+*.sqlite*
+__pycache__/
+*.pyc
+# не коммитим сгенерированное
+report*.txt
+.no_*/

@@ -1,0 +1,32 @@
+{
+  "$comment": "Role-based model routing. Models are provider/model ids resolved by bin/model_call.sh. No vendor is mandatory: any configured provider works. fallback fires on provider failure; strong_finalizer is ONE bounded attempt after proven progress; reasoning-budget ladder is automatic.",
+  "roles": {
+    "explorer": {
+      "model": "zai/glm-5.3-flash",
+      "fallback": "zai/glm-5.3",
+      "why": "cheap fast read/localize"
+    },
+    "implementer": {
+      "model": "zai/glm-5.3",
+      "fallback": "openai/gpt-5.6-sol",
+      "why": "coding: red test + minimal fix"
+    },
+    "strong_finalizer": {
+      "model": "openai/gpt-5.6-sol",
+      "fallback": "zai/glm-5.3",
+      "why": "strongest available; bounded; only after meaningful progress"
+    },
+    "reviewer": {
+      "model": "zai/glm-5.3",
+      "fallback": "zai/glm-5.3-flash",
+      "why": "prefer a different vendor if you have one"
+    }
+  },
+  "providers_note": "add a provider in bin/model_call.sh case-block + its key source; see docs/MODEL_ROUTING.md",
+  "cost_policy_order": [
+    "deterministic shell/git/pytest",
+    "cheap explorer",
+    "implementer",
+    "strong finalizer only on event"
+  ]
+}

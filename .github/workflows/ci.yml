@@ -1,0 +1,35 @@
+name: CI
+on:
+  push: { branches: ["**"] }
+  pull_request:
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: sudo apt-get update && sudo apt-get install -y jq shellcheck
+        if: false  # jq предустановлен; shellcheck опционален (см. шаг ниже)
+      - name: shell syntax
+        run: for f in bin/*.sh scripts/*.sh examples/skills/*/bin/*.sh; do bash -n "$f"; done
+      - name: python syntax
+        run: python3 -m py_compile bin/intake.py examples/skills/*/route.py
+      - name: JSON + schemas
+        run: |
+          for j in contracts/*.json examples/*.json config/*.example.json; do jq -e . "$j" >/dev/null || exit 1; done
+          pip install jsonschema && python3 - <<'PY'
+          import json, glob, jsonschema
+          schemas = {**{s.split('/')[-1]: json.load(open(s)) for s in glob.glob('contracts/*.schema.json')}}
+          r = json.load(open('examples/RESULT.example.json'))
+          jsonschema.validate(r, schemas['RESULT.schema.json'])
+          t = json.load(open('examples/TASK.example.json'))
+          jsonschema.validate(t, schemas['TASK.schema.json'])
+          print('examples validate')
+          PY
+      - name: secret scan
+        run: ./scripts/secret-scan.sh
+      - name: selftest (default)
+        run: ./bin/selftest.sh
+      - name: selftest (full)
+        run: ./bin/selftest.sh --full

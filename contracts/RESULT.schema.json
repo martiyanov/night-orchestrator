@@ -1,0 +1,121 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Night Orchestrator RESULT",
+  "type": "object",
+  "required": [
+    "task_id",
+    "status",
+    "summary",
+    "files_changed",
+    "checks",
+    "decisions",
+    "assumptions",
+    "unresolved",
+    "next"
+  ],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+    },
+    "status": {
+      "enum": [
+        "READY_FOR_OWNER_PASS",
+        "NO_CHANGE_REQUIRED",
+        "NEEDS_OWNER_INPUT",
+        "BLOCKED",
+        "FAILED",
+        "PASS",
+        "FAIL",
+        "OWNER_GATE",
+        "PERMISSION_VIOLATION"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "files_changed": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "status"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "PASS",
+              "FAIL",
+              "SKIPPED"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "assumptions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "unresolved": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "next": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "writes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "commit_sha": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "next_action": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true,
+  "$comment": "Orchestrator appends machine evidence fields: gate_evidence, attempts, model_calls, worktree, branch."
+}

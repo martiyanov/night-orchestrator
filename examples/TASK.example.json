@@ -1,0 +1,14 @@
+{
+  "project": "example-project",
+  "task_id": "BUG-42",
+  "goal": "Fix the login failure described below; start with a failing regression test, then minimal fix, then targeted tests.\nSymptom: after password reset the login form shows a generic error.",
+  "risk": "MEDIUM",
+  "mode": "writable",
+  "allowed_paths": ["src/auth/login.py", "tests/test_login.py"],
+  "forbidden_paths": [".env", ".env.*", "data/", "ops/deploy*"],
+  "bootstrap": ["README.md"],
+  "checks": [
+    {"name": "targeted", "command": "python3 -m pytest tests/test_login.py -q", "timeout_seconds": 600}
+  ],
+  "owner_gates": ["OWNER PASS: приёмка результата владельцем"]
+}

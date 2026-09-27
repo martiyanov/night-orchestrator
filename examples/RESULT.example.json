@@ -1,0 +1,18 @@
+{
+  "task_id": "BUG-42",
+  "status": "READY_FOR_OWNER_PASS",
+  "summary": "Password-reset login failure fixed: stale session token invalidated after reset; regression test added.",
+  "files_changed": ["src/auth/login.py", "tests/test_login.py"],
+  "checks": [{"name": "targeted", "status": "PASS", "detail": "12 passed"}],
+  "decisions": ["invalidate session on reset (confirmed by owner)"],
+  "assumptions": [],
+  "unresolved": [],
+  "reason": "executor result accepted by gates/review",
+  "evidence": ["gate_evidence.txt"],
+  "tests": ["12 passed"],
+  "writes": 3,
+  "commit_sha": "ab12cd3",
+  "next": "review", "next_action": "owner review of the diff, then OWNER PASS",
+  "attempts": 2, "risk": "MEDIUM", "mode": "writable",
+  "execution_profile": "balanced", "executor_model_final": "zai/glm-5.3"
+}
