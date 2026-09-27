@@ -11,13 +11,15 @@
 #
 # Safety:
 #   - run-id: строгий regex ^[A-Za-z0-9_-]{1,64}$ (без traversal/метасимволов);
-#   - ORCH_ROOT/RUNS_DIR — literal, из окружения агента НЕ читаются;
+#   - ORCH_ROOT: явное значение из окружения имеет приоритет; иначе корень
+#     вычисляется от расположения самого скрипта (versioned installs вроде
+#     .../night-orchestrator-v0.1.2 работают без дополнительных переменных);
 #   - symlink-guard: run-dir не должен быть симлинком, realpath обязан
 #     совпадать с каноническим путём под RUNS_DIR (защита от escape);
 #   - никаких удалений; операции new/stop идемпотентны.
 set -euo pipefail
 
-ORCH_ROOT="${ORCH_ROOT:-$HOME/.local/share/night-orchestrator}"
+ORCH_ROOT="${ORCH_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 RUNS_DIR="$ORCH_ROOT/runs"
 
 die() { echo "ag_task: REFUSED: $*" >&2; exit 1; }

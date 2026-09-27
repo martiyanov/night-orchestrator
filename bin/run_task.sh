@@ -101,6 +101,9 @@ P_MAX_READ_IMP="${ORCH_TEST_MAX_READ_CALLS:-$P_MAX_READ_IMP}"
 P_MAX_EXPL_MIN="${ORCH_TEST_MAX_EXPL_MIN:-$P_MAX_EXPL_MIN}"
 P_MAX_REPEAT_READS="${ORCH_TEST_MAX_REPEAT_READS:-$P_MAX_REPEAT_READS}"
 P_MAX_COMPACTIONS="${ORCH_TEST_MAX_COMPACTIONS:-$P_MAX_COMPACTIONS}"
+# selftest-шов для no-write deadline (first_write_target_minutes): без него
+# ветку нельзя проверить детерминированно (реальные минуты ждать нельзя)
+P_FIRST_WRITE_MIN="${ORCH_TEST_FIRST_WRITE_MIN:-$P_FIRST_WRITE_MIN}"
 MC_EXTRA_FLAGS=""
 # reasoning-budget ladder: один big-retry и одна strong-эскалация на RUN
 RB_BIG_USED=0; RB_SF_USED=0
@@ -501,7 +504,7 @@ agent_attempt() { # $1 = phase label
             emit ESCALATION "$(jq -cn --arg t "$TASK_ID" --arg r "turns_without_write=$turns_since_write" '{task_id:$t,reason:$r}')"
             return 200
           fi
-          if (( stage_min >= P_FIRST_WRITE_MIN && writes -eq 0 )); then
+          if (( stage_min >= P_FIRST_WRITE_MIN && writes == 0 )); then
             emit ESCALATION "$(jq -cn --arg t "$TASK_ID" --arg r "no_write_in_${stage_min}min" '{task_id:$t,reason:$r}')"
             return 200
           fi
@@ -673,7 +676,9 @@ while :; do
     if [[ $gates_ok -eq 1 ]]; then
       # честные терминальные ответы без claims работы принимаются напрямую:
       # review-цикл — только для результатов, заявляющих выполненную работу
-      local attempt_st; attempt_st="$(jq -r '.status // ""' "$TASK_DIR/attempt_result.json" 2>/dev/null)"
+      # (обычное присваивание: это верхний уровень скрипта, local вне
+      # функции не присваивает и ломал пропуск review — регрессия 0.1.2)
+      attempt_st="$(jq -r '.status // ""' "$TASK_DIR/attempt_result.json" 2>/dev/null)"
       if [[ "$attempt_st" == "NEEDS_OWNER_INPUT" || "$attempt_st" == "NO_CHANGE_REQUIRED" || "$attempt_st" == "BLOCKED" ]]; then
         emit REVIEW_SKIPPED "$(jq -cn --arg t "$TASK_ID" --arg s "$attempt_st" '{task_id:$t,terminal_status:$s}')"
         break

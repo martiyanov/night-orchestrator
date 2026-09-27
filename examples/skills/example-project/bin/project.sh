@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # project.sh — единственный узкий вход проектного навыка в Intake/Night
-# Orchestrator (аналог ag_task.sh): владелец может безопасно разрешить этот
+# Orchestrator (аналог task.sh): владелец может безопасно разрешить этот
 # скрипт Allow-Always, не открывая общий python3/shell.
 #
 # Разрешены ТОЛЬКО подкоманды:

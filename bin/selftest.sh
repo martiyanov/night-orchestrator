@@ -341,7 +341,7 @@ rc=$?
 [[ $rc -eq 43 ]] && ok "gpt-5.6-sol refused without trigger (rc=43)" || bad "gpt-5.6-sol guard rc=$rc (expected 43)"
 
 # ===========================================================================
-echo "== 5b. ag_task.sh wrapper (lifecycle entrypoint; synthetic runs only) =="
+echo "== 5b. task.sh wrapper (lifecycle entrypoint; synthetic runs only) =="
 AGT_PREFIX="selftest-agtask"
 agtcleanup() { rm -rf "$ORCH_ROOT/runs/$AGT_PREFIX"-*; }
 agtcleanup
@@ -399,6 +399,27 @@ ln -sfn /tmp "$ORCH_ROOT/runs/$AGT_PREFIX-sym"
 bash "$AGT" stop "$AGT_PREFIX-sym" >/dev/null 2>&1 && bad "stop via symlink ACCEPTED" || ok "stop via symlink refused"
 bash "$AGT" new "$AGT_PREFIX-sym" >/dev/null 2>&1 && bad "new via symlink ACCEPTED" || ok "new via symlink refused"
 [ -e /tmp/STOP ] && bad "/tmp/STOP leaked through symlink!" || ok "no write through symlink"
+
+# 5b-8: явный ORCH_ROOT из окружения имеет приоритет над auto-root
+EXPL_ROOT="$SELFTEST_ROOT/rootA-explicit"; mkdir -p "$EXPL_ROOT/runs"
+ORCH_ROOT="$EXPL_ROOT" bash "$ORCH_TEST_HOME/bin/task.sh" new "$AGT_PREFIX-rootA" >/dev/null 2>&1
+[ -d "$EXPL_ROOT/runs/$AGT_PREFIX-rootA/tasks" ] && ok "5b-8 explicit ORCH_ROOT wins" || bad "5b-8 explicit root ignored"
+# и НЕ создал каталог в корне скрипта
+[ ! -e "$ORCH_TEST_HOME/runs/$AGT_PREFIX-rootA" ] && ok "5b-8 no leak into script root" || bad "5b-8 leaked into script root"
+rm -rf "$EXPL_ROOT"
+
+# 5b-9: ORCH_ROOT не задан -> корень от расположения скрипта (versioned install)
+env -u ORCH_ROOT bash "$ORCH_TEST_HOME/bin/task.sh" new "$AGT_PREFIX-rootB" >/dev/null 2>&1
+[ -d "$ORCH_TEST_HOME/runs/$AGT_PREFIX-rootB/tasks" ] && ok "5b-9 script-relative root (no env)" || bad "5b-9 auto-root broken"
+# и НЕ создал ничего в историческом дефолте ~/.local/share/night-orchestrator
+[ ! -e "$HOME/.local/share/night-orchestrator/runs/$AGT_PREFIX-rootB" ] && ok "5b-9 no legacy-default leak" || bad "5b-9 wrote to legacy default!"
+
+# 5b-10: установка в произвольный temp-path -> task.sh работает без переменных
+INST_ROOT="$SELFTEST_ROOT/rootC-install-$$"
+bash "$REPO_ROOT/scripts/install.sh" --target "$INST_ROOT" >/dev/null 2>&1
+env -u ORCH_ROOT bash "$INST_ROOT/bin/task.sh" new "$AGT_PREFIX-rootC" >/dev/null 2>&1
+[ -d "$INST_ROOT/runs/$AGT_PREFIX-rootC/tasks" ] && ok "5b-10 random temp install: task.sh standalone" || bad "5b-10 temp install broken"
+rm -rf "$INST_ROOT"
 
 agtcleanup
 [ -e "$ORCH_ROOT/runs/$AGT_PREFIX-ag103" ] && bad "cleanup left artifacts" || ok "synthetic runs cleaned"
@@ -583,6 +604,40 @@ smry="$(jq -r '.summary // ""' "$MOCKROOT/case_7f/SELF-7F/RESULT.json" 2>/dev/nu
 [[ "$smry" != "-" && -n "$smry" ]] && ok "7f summary factual, not '-'" || bad "7f stub summary"
 [[ -s "$MOCKROOT/case_7f/report.txt" ]] && ok "7f report.txt built" || bad "7f no report.txt"
 
+# 7g: no-write deadline (first_write_target_minutes) РЕАЛЬНО срабатывает —
+# регрессия: (( writes -eq 0 )) молча убивала ветку (arith parse error),
+# эскалация no_write_in_*min не существовала. Шв: ORCH_TEST_FIRST_WRITE_MIN=0.
+mk_task "$MOCKROOT/t_7g.json" "SELF-7G" writable
+jq '.cleanup_worktree=true' "$MOCKROOT/t_7g.json" > "$MOCKROOT/t_7g.json.t" && mv "$MOCKROOT/t_7g.json.t" "$MOCKROOT/t_7g.json"
+: > "$MOCKROOT/f_7g.jsonl"
+fixture_shell "$MOCKROOT/f_7g.jsonl" "cat AGENTS.md"
+fixture_result "$MOCKROOT/f_7g.jsonl" '{"action":"result","result":{"task_id":"SELF-7G","status":"NO_CHANGE_REQUIRED","summary":"verified","files_changed":[],"checks":[],"decisions":[],"assumptions":[],"unresolved":[],"next":"close"}}'
+st="$(ORCH_TEST_FIRST_WRITE_MIN=0 run_case "case_7g" "$MOCKROOT/t_7g.json" "$MOCKROOT/f_7g.jsonl")"
+nw="$(grep -c 'no_write_in' "$MOCKROOT/case_7g/log.jsonl" 2>/dev/null || true)"; nw=${nw:-0}
+tk="$(grep -c '"event":"TAKEOVER"' "$MOCKROOT/case_7g/log.jsonl" 2>/dev/null || true)"; tk=${tk:-0}
+[[ "$st" == "NO_CHANGE_REQUIRED" && "$nw" -ge 1 && "$tk" -ge 1 ]] \
+  && ok "7g no-write deadline fires -> escalation no_write_in_* -> takeover" \
+  || bad "7g status=$st no_write=$nw takeover=$tk"
+
+# 7h: терминальный RESULT (NO_CHANGE_REQUIRED) на MEDIUM risk принимается
+# напрямую — БЕЗ review-вызова. Регрессия: local вне функции не присваивал
+# attempt_st, терминальные статусы уходили в лишний review.
+jq -n --argjson checks '[]' --argjson og '[]' \
+  '{project:"example-project", task_id:"SELF-7H", goal:"selftest", risk:"MEDIUM", mode:"writable",
+    allowed_paths:[], forbidden_paths:[".env"], bootstrap:["AGENTS.md"], checks:$checks, owner_gates:$og, cleanup_worktree:true}' > "$MOCKROOT/t_7h.json"
+: > "$MOCKROOT/f_7h.jsonl"
+fixture_shell "$MOCKROOT/f_7h.jsonl" "cat AGENTS.md"
+fixture_result "$MOCKROOT/f_7h.jsonl" '{"action":"result","result":{"task_id":"SELF-7H","status":"NO_CHANGE_REQUIRED","summary":"nothing to do","files_changed":[],"checks":[],"decisions":[],"assumptions":[],"unresolved":[],"next":"close"}}'
+st="$(run_case "case_7h" "$MOCKROOT/t_7h.json" "$MOCKROOT/f_7h.jsonl")"
+rcalls="$(jq -s '[.[] | select(.role=="review")] | length' "$MOCKROOT/case_7h/SELF-7H/model_calls.jsonl" 2>/dev/null || echo 9)"
+skp="$(grep -c 'REVIEW_SKIPPED' "$MOCKROOT/case_7h/log.jsonl" 2>/dev/null || true)"; skp=${skp:-0}
+# регрессия-маркер: local вне функции печатает stderr-ошибку (присваивание
+# после него всё же работало, но шум и утечка в глобал — дефект)
+loc_err="$(grep -c 'can only be used in a function' "$MOCKROOT/case_7h/stdout.log" 2>/dev/null || true)"; loc_err=${loc_err:-0}
+[[ "$st" == "NO_CHANGE_REQUIRED" && "$rcalls" == "0" && "$skp" -ge 1 && "$loc_err" -eq 0 ]] \
+  && ok "7h terminal RESULT on MEDIUM -> REVIEW_SKIPPED, zero review calls, no local-scope error" \
+  || bad "7h status=$st review_calls=$rcalls skipped=$skp local_err=$loc_err"
+
 # --- 8: convergence tuning (early write / post-write budget / finalizer) ---
 # 8a: 0 writes -> НЕ получает post-write extra turns (attempt умирает на базе 24)
 mk_task "$MOCKROOT/t_8a.json" "SELF-8A" writable
@@ -759,6 +814,39 @@ taskB="$($INTK task "$iidB")"
 dryB="$($INTK launch "$iidB" --dry-run)"
 [[ "$dryB" == *"[dry-run]"* && "$dryB""x" != *night_run* ]] && ok "11B canonical launch dry-run ok" || bad "11B dry=$dryB"
 [[ "$(ls "$ORCH_ROOT/runs" | wc -l)" -eq "$runs_before_B" ]] && ok "11B no real run from dry" || bad "11B run leaked"
+
+# M: НАСТОЯЩИЙ launch (без --dry-run) — task.sh new создаёт run, night_run
+# исполняет задачу до RESULT на мок-модели. Регрессия: intake звал
+# переименованный ag_task.sh — «Не удалось создать run»; сухой запуск
+# (11B/12H) этого не видел.
+IT_M="$MOCKROOT/intakeM"; mkdir -p "$IT_M"
+: > "$MOCKROOT/f_11m.jsonl"
+fixture_shell "$MOCKROOT/f_11m.jsonl" "cat VERSION"
+fixture_result "$MOCKROOT/f_11m.jsonl" '{"action":"result","result":{"task_id":"SELF-11M","status":"NO_CHANGE_REQUIRED","summary":"checked","files_changed":[],"checks":[],"decisions":[],"assumptions":[],"unresolved":[],"next":"close"}}'
+oM="$(INTAKE_DIR="$IT_M" MOCK_FIXTURE="$MOCKROOT/f_11m.jsonl" ORCH_TEST_NO_SEND=1 $INTK message "Запусти TASK-11M: проверь что файл VERSION существует, ничего не меняя; критерий: проверка выполнена" 2>&1)"
+iidM="$(grep -oE '[0-9]{8}T[0-9]{6}-[a-z0-9-]+' <<< "$oM" | tail -1)"
+[[ -n "$iidM" && "$oM" == *"Постановка достаточна"* ]] && ok "11M intake READY_TO_RUN" || bad "11M out=$oM"
+outM="$(INTAKE_DIR="$IT_M" MOCK_FIXTURE="$MOCKROOT/f_11m.jsonl" ORCH_TEST_NO_SEND=1 $INTK launch "$iidM" 2>&1)"
+ridM="$(grep -oE '2[0-9]{7}-[a-z0-9-]+' <<< "$outM" | tail -1)"
+if [[ -n "$ridM" && -f "$ORCH_ROOT/runs/$ridM/tasks/task.json" ]]; then
+  ok "11M real launch: task.sh new created run dir + TASK"
+else
+  bad "11M launch failed (no run created): $outM"
+fi
+resM=""; fM=""
+if [[ -n "$ridM" ]]; then
+  for i in $(seq 1 60); do
+    fM="$(ls "$ORCH_ROOT/runs/$ridM"/*/RESULT.json 2>/dev/null | head -1)"
+    [ -n "$fM" ] && { resM="$(jq -r '.status // ""' "$fM")"; break; }
+    sleep 2
+  done
+  [[ "$resM" == "NO_CHANGE_REQUIRED" ]] && ok "11M night_run executed task to RESULT (mock model)" || bad "11M result='$resM' (run=$ridM)"
+  rcM="$(jq -s '[.[] | select(.role=="review")] | length' "$ORCH_ROOT/runs/$ridM"/*/model_calls.jsonl 2>/dev/null || echo 9)"
+  [[ "$rcM" == "0" ]] && ok "11M terminal status: no review call" || bad "11M review_calls=$rcM"
+  rm -rf "$ORCH_ROOT/runs/$ridM"
+else
+  bad "11M cannot verify execution without run id"
+fi
 
 # C: расплывчатая просьба -> NEEDS_CLARIFICATION, 1-3 вопроса, без run
 outC="$($INTK message "Сделай поиск сценариев удобнее")"

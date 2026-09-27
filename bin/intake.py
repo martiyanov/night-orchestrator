@@ -392,7 +392,7 @@ def cmd_launch(iid, dry=False):
     task_clean = {k: v for k, v in task.items() if not k.startswith("_")}
     if dry:
         return reply(f"[dry-run] run-id: {rid}\n" + json.dumps(task_clean, ensure_ascii=False, indent=1))
-    ag = os.path.join(ORCH_ROOT, "bin", "ag_task.sh")
+    ag = os.path.join(ORCH_ROOT, "bin", "task.sh")
     r = subprocess.run(["bash", ag, "new", rid], capture_output=True, text=True)
     if r.returncode != 0:
         return reply("Не удалось создать run: " + r.stderr.strip())
@@ -405,7 +405,7 @@ def cmd_launch(iid, dry=False):
                      stdout=open(os.path.join(ORCH_ROOT, "runs", rid, "night_run.out"), "w"),
                      stderr=subprocess.STDOUT, start_new_session=True)
     return reply(f"▶ Запущен канонический прогон {rid}. Отчёт придёт сюда; "
-                 f"ждать: ag_task.sh wait {rid}.")
+                 f"ждать: task.sh wait {rid}.")
 
 def cmd_from_result(run_dir):
     import glob as _g
