@@ -4,7 +4,7 @@
 # Sourced by run_task.sh / night_run.sh / selftest.sh.
 # guard_check returns 0 (allow) / 1 (deny + reason on stderr). rc 125 in run_guarded = PERMISSION_VIOLATION.
 
-ORCH_ROOT="${ORCH_ROOT:-$HOME/.openclaw/night-orchestrator}"
+ORCH_ROOT="${ORCH_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
 # ---------------------------------------------------------------- guard ----
 

@@ -32,7 +32,7 @@
       "post_write_extra_turns": 8
     },
     "fast": {
-      "$comment": "FAST (AG-107-02 postmortem, PHASE-3 spec): дешёвое исследование на Flash; ранний exploration deadline (reads<=10 / 12min / compactions<=2); нет progress -> takeover на GLM-5.3 (=balanced strength); hard 45min. Легаси-вариант 'glm-5.3 сразу' не эскалировался (same-model) и выгорал в чтении.",
+      "$comment": "Cheap exploration (Flash-class), early write deadline, takeover to the implementer model on stall.",
       "executor_model": "zai/glm-5.3-flash",
       "takeover_model": "zai/glm-5.3",
       "max_agent_turns": 24,

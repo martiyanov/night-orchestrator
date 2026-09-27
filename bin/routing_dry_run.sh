@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # routing_dry_run.sh <task.json> [profile] — resolve the model chain WITHOUT calling models.
 set -u
-ORCH_ROOT="${ORCH_ROOT:-$HOME/.openclaw/night-orchestrator}"
+ORCH_ROOT="${ORCH_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 TASK_FILE="${1:?task.json}"; PROFILE="${2:-$(jq -r '.execution_profile // "balanced"' "$ORCH_ROOT/config/permissions.json")}"
 pj() { jq -r --arg p "$PROFILE" --arg k "$1" '.profiles[$p][$k] // .profiles.balanced[$k]' "$ORCH_ROOT/config/permissions.json"; }
 TID="$(jq -r .task_id "$TASK_FILE")"; RISK="$(jq -r .risk "$TASK_FILE")"; MODE="$(jq -r .mode "$TASK_FILE")"

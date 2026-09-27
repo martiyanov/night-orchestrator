@@ -7,7 +7,7 @@
 # triggered by: N turns without meaningful write / minutes without write /
 # re-exploration after implementation started / invalid-reply nudges exhausted.
 set -u
-ORCH_ROOT="${ORCH_ROOT:-$HOME/.openclaw/night-orchestrator}"
+ORCH_ROOT="${ORCH_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # shellcheck source=bin/gates.sh
 source "$ORCH_ROOT/bin/gates.sh"
 

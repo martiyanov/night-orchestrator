@@ -14,7 +14,7 @@
 # Full request/response transcripts go to $RUN_DIR/transcripts/ (0700).
 
 set -u
-ORCH_ROOT="${ORCH_ROOT:-$HOME/.openclaw/night-orchestrator}"
+ORCH_ROOT="${ORCH_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 SECRETS="$HOME/.config/openclaw/secrets/providers.json"
 
 ROLE=""; MODEL=""; SYSTEM_FILE=""; PROMPT_FILE=""; OUT_FILE=""; RUN_DIR=""; MAXTOK=4096; TRIGGER=0

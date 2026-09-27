@@ -11,9 +11,9 @@
 # умолчанию; включаются env ORCH_REPORT_BUTTONS=1. Нажатия ни к чему не
 # приводят (callback-обработчика нет) — OWNER PASS/GO остаются словами
 # владельца, автоматического merge/deploy НЕТ.
-# Bot token read at send time from openclaw.json (never logged). Chat id from config/report.json.
+# Chat id из config/report.json; токен — см. блок доставки ниже (никогда не логируется).
 set -u
-ORCH_ROOT="${ORCH_ROOT:-$HOME/.openclaw/night-orchestrator}"
+ORCH_ROOT="${ORCH_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 NO_SEND=0
 if [[ "${1:-}" == "--no-send" ]]; then NO_SEND=1; shift; fi
 RUN_DIR="${1:?run_dir}"
@@ -176,23 +176,19 @@ if [[ "$NO_SEND" == "1" ]]; then
 fi
 
 # ---- send via Telegram -----------------------------------------------------
-# botToken source is configurable (ORCH_REPORT_TOKEN_CMD or openclaw.json);: {"source":"file","provider":"filekeys","id":"/providers/telegram/botToken"}
-TOKEN="${ORCH_REPORT_TOKEN:-$(python3 - <<'PYEOF'
-import json, os
-cfg = json.load(open(os.path.expanduser("~/.openclaw/openclaw.json")))
-bt = cfg["channels"]["telegram"]["botToken"]
-if isinstance(bt, dict) and bt.get("source") == "file":
-    provs = json.load(open(os.path.expanduser("~/.config/openclaw/secrets/providers.json")))["providers"]
-    parts = bt["id"].strip("/").split("/")  # e.g. ["providers","telegram","botToken"]
-    node = provs
-    for p in parts[1:]:
-        node = node[p]
-    print(node)
-else:
-    print(bt)
-PYEOF
-)}"
-if [[ -z "$TOKEN" ]]; then echo "report: no bot token"; exit 1; fi
+# доставка отчёта: токен из ORCH_REPORT_TOKEN или config/report.json (report_token_cmd);
+# Источник токена доставки: env ORCH_REPORT_TOKEN (значение) ИЛИ команда
+# report_token_cmd из config/report.json (вывод команды; ключи не логируются).
+# Без источника доставка пропускается с пояснением (сборка отчёта не страдает).
+TOKEN="${ORCH_REPORT_TOKEN:-}"
+if [ -z "$TOKEN" ] && [ -f "$ORCH_ROOT/config/report.json" ]; then
+  _cmd="$(jq -r '.report_token_cmd // ""' "$ORCH_ROOT/config/report.json")"
+  [ -n "$_cmd" ] && TOKEN="$($_cmd 2>/dev/null || true)"
+fi
+if [ -z "$TOKEN" ]; then
+  echo "report: токен доставки не настроен (ORCH_REPORT_TOKEN или config/report.json:report_token_cmd); доставка пропущена" >&2
+  exit 0
+fi
 
 SEND_ARGS=(--data-urlencode "chat_id=${CHAT_ID}" --data-urlencode "text@${REPORT}")
 if [[ "${ORCH_REPORT_BUTTONS:-0}" == "1" ]]; then

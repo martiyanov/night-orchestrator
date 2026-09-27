@@ -1,0 +1,6 @@
+{
+  "$comment": "Report delivery (Telegram sendMessage). chat_id — получатель отчётов. Токен НЕ хранится здесь: env ORCH_REPORT_TOKEN или команда report_token_cmd (её вывод; ключи не логируются).",
+  "chat_id": "SET-OWNER-CHAT-ID",
+  "report_token_cmd": "",
+  "disable_notification": false
+}

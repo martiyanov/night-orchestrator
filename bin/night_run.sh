@@ -2,7 +2,7 @@
 # night_run.sh — run a batch of TASKs and deliver the morning report.
 # Usage: night_run.sh <run_dir>   (run_dir must contain tasks/*.json)
 set -u
-ORCH_ROOT="${ORCH_ROOT:-$HOME/.openclaw/night-orchestrator}"
+ORCH_ROOT="${ORCH_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # shellcheck source=bin/gates.sh
 source "$ORCH_ROOT/bin/gates.sh"
 

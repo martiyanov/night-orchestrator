@@ -28,7 +28,8 @@ import subprocess
 import sys
 import datetime
 
-ORCH_ROOT = os.environ.get("ORCH_ROOT", os.path.expanduser("~/.openclaw/night-orchestrator"))
+_default_root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ORCH_ROOT = os.environ.get("ORCH_ROOT", _default_root)
 INTAKE_DIR = os.environ.get("INTAKE_DIR", os.path.join(ORCH_ROOT, "intake"))
 DEFAULT_PROJECT = os.environ.get("INTAKE_PROJECT", "example-project")
 
