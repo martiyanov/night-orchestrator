@@ -149,6 +149,10 @@ fi
 REPO="$(echo "$REG" | jq -r '.repo')"
 GUARD_DENY_ROOTS="$(echo "$REG" | jq -r '.guard_roots // [] | join(" ")')"
 export GUARD_DENY_ROOTS
+# проектно-ограниченные точные разрешения (staging deploy и т.п.); без поля
+# в реестре — пусто, guard работает как раньше
+ORCH_PROJECT_ACTIONS="$(echo "$REG" | jq -c '.project_actions // {}')"
+export ORCH_PROJECT_ACTIONS
 WT_ROOT="$(echo "$REG" | jq -r '.worktree_root')"
 DEFAULT_BRANCH="$(echo "$REG" | jq -r '.default_branch')"
 TEST_CMD="$(echo "$REG" | jq -r '.test_command')"
@@ -464,6 +468,10 @@ agent_attempt() { # $1 = phase label
         emit AGENT_SHELL "{\"task_id\":\"$TASK_ID\",\"cmd_head\":\"$(printf '%s' "$cmd" | head -c 120 | tr '"' "'")\"}"
         run_guarded "$MODE" "$JAIL" "$(jq -r '.command_timeout_seconds' "$PERMS")" "$cmd" "$TASK_DIR/cmd_out.txt"
         local grc=$?
+        # audit: разрешённое проектное действие (точное совпадение с реестром)
+        if [[ -n "${GUARD_MATCHED_ACTION:-}" ]]; then
+          emit PROJECT_ACTION_ALLOWED "$(jq -cn --arg t "$TASK_ID" --arg a "$GUARD_MATCHED_ACTION" '{task_id:$t,action:$a}')"
+        fi
         if [[ $grc -eq 125 ]]; then
           { echo "PERMISSION_VIOLATION: guard denied command (FATAL, no retry):"; echo "$cmd"; } > "$TASK_DIR/failure_evidence.txt"
           emit PERMISSION_VIOLATION "$(jq -cn --arg t "$TASK_ID" --arg c "$(printf '%s' "$cmd" | head -c 120)" '{task_id:$t,cmd_head:$c}')"

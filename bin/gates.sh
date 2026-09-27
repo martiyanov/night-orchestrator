@@ -8,6 +8,90 @@ ORCH_ROOT="${ORCH_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
 # ---------------------------------------------------------------- guard ----
 
+# _project_action_match CMD JAIL ACTIONS_JSON — точное совпадение команды с
+# проектным действием из реестра (project_actions). Печатает compact-JSON
+# {"name":...,"env_fixed":{...}} в stdout или пусто. Гарантии:
+#   - shlex-токены: ведущие env-присваивания строго по spec (имя+pattern,
+#     точный набор, без лишних); argv строго равен spec — любые добавки,
+#     опции, shell-метасимволы (;, &&, |, $(), редиректы) остаются
+#     отдельными/изменёнными токенами и ломают равенство;
+#   - пути argv живут ВНУТРИ jail, обычный файл, не симлинк;
+#   - guard roots не встречаются ни в одном токене;
+#   - только writable-режим (read_only ничего не мутирует).
+_project_action_match() {
+  python3 - "$1" "$2" "$3" <<'PYPA'
+import json, os, re, shlex, stat, sys
+cmd, jail, actions_json = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    actions = json.loads(actions_json) if actions_json.strip() else {}
+except Exception:
+    actions = {}
+if not isinstance(actions, dict) or not actions:
+    sys.exit(0)
+try:
+    toks = shlex.split(cmd)
+except ValueError:
+    sys.exit(0)
+if not toks:
+    sys.exit(0)
+guard_roots = [r for r in os.environ.get("GUARD_DENY_ROOTS", "").split() if r]
+jail_real = os.path.realpath(jail)
+def inside_jail(p):
+    rp = os.path.realpath(p)
+    return rp == jail_real or rp.startswith(jail_real + os.sep)
+for name, spec in actions.items():
+    if not isinstance(spec, dict):
+        continue
+    if spec.get("mode", "writable") != "writable":
+        continue
+    env_specs = spec.get("env_from_model", [])
+    argv = spec.get("argv", [])
+    if not isinstance(env_specs, list) or not isinstance(argv, list) or not argv:
+        continue
+    if len(toks) != len(env_specs) + len(argv):
+        continue
+    ok = True
+    for i, es in enumerate(env_specs):
+        m = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", toks[i])
+        if not m or not isinstance(es, dict) or es.get("name") != m.group(1):
+            ok = False; break
+        if not re.fullmatch(es.get("pattern", r".*"), m.group(2)):
+            ok = False; break
+    if not ok:
+        continue
+    if toks[len(env_specs):] != [str(a) for a in argv]:
+        continue
+    bad = False
+    for t in toks:
+        for gr in guard_roots:
+            if gr in t:
+                bad = True; break
+        if bad:
+            break
+    if bad:
+        continue
+    for a in argv:
+        a = str(a)
+        if "/" not in a:
+            continue
+        p = a if a.startswith("/") else os.path.join(jail, a)
+        if not inside_jail(p):
+            bad = True; break
+        try:
+            st_ = os.lstat(p)
+            if stat.S_ISLNK(st_.st_mode) or not stat.S_ISREG(st_.st_mode):
+                bad = True; break
+        except OSError:
+            bad = True; break
+    if bad:
+        continue
+    fixed = spec.get("env_fixed", {})
+    print(json.dumps({"name": name, "env_fixed": fixed if isinstance(fixed, dict) else {}},
+                     ensure_ascii=False))
+    break
+PYPA
+}
+
 guard_check() {
   local mode="$1" jail="$2" cmd="$3"
   local cmd_stripped; cmd_stripped="$(_strip_heredocs "$cmd")"
@@ -20,6 +104,24 @@ guard_check() {
 
   local re
   _deny() { echo "guard: DENY pattern [$1] matched" >&2; return 1; }
+
+  # --- project actions (проектно-ограниченные точные разрешения) ------------
+  # Реестр проекта может описать действия (напр. штатный staging deploy):
+  # команда допускается ТОЛЬКО при точном совпадении с spec — до универсальных
+  # запретов deploy/bash, но сами запреты для остальных команд не меняются.
+  # env_fixed добавит run_guarded при исполнении (секреты/пути не проходят
+  # через команду модели). Без ORCH_PROJECT_ACTIONS поведение идентично прежнему.
+  GUARD_MATCHED_ACTION=""; GUARD_ACTION_ENV=""
+  if [[ -n "${ORCH_PROJECT_ACTIONS:-}" && "$mode" == "writable" ]]; then
+    local _pa
+    _pa="$(_project_action_match "$cmd_stripped" "$jail" "$ORCH_PROJECT_ACTIONS")"
+    if [[ -n "$_pa" ]]; then
+      GUARD_MATCHED_ACTION="$(printf '%s' "$_pa" | jq -r '.name // empty')"
+      GUARD_ACTION_ENV="$(printf '%s' "$_pa" | jq -c '.env_fixed // {}')"
+      echo "guard: ALLOW project action [$GUARD_MATCHED_ACTION] (exact match, jail-confined)" >&2
+      return 0
+    fi
+  fi
 
   # --- universal: production/deploy/system control -------------------------
   for re in \
@@ -277,9 +379,20 @@ guard_check() {
 # executes CMD with bash -c inside JAIL under sanitized env; rc 125 => guard violation
 run_guarded() {
   local mode="$1" jail="$2" tmo="$3" cmd="$4" out="$5"
+  GUARD_MATCHED_ACTION=""; GUARD_ACTION_ENV=""
   if ! guard_check "$mode" "$jail" "$cmd"; then return 125; fi
+  # project action: добавить фиксированные env из spec (значения из реестра,
+  # не из команды модели; без tab/переводов строк в значениях)
+  local -a _act_env=()
+  if [[ -n "$GUARD_ACTION_ENV" && "$GUARD_ACTION_ENV" != "{}" ]]; then
+    while IFS=$'\t' read -r _k _v; do
+      [ -n "${_k:-}" ] || continue
+      _v="${_v/#\~/$HOME}"   # ~/ в значениях реестра раскрываем; $VAR — нет
+      _act_env+=("$_k=$_v")
+    done < <(printf '%s' "$GUARD_ACTION_ENV" | jq -r 'to_entries[] | "\(.key)\t\(.value)"')
+  fi
   # NOTE: NO_* must be argv assignments to env (env -i clears inherited environ)
-  env -i \
+  env -i ${_act_env[@]+"${_act_env[@]}"} \
     PATH="${ORCH_TEST_VENV:+$ORCH_TEST_VENV/bin:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
     HOME="$jail" \
     LANG="${LANG:-C.UTF-8}" TERM=dumb \

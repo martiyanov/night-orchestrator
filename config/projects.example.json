@@ -1,5 +1,5 @@
 {
-  "$comment": "Project registry: what the orchestrator may touch. repo = your git checkout; worktree_root = where task worktrees live; forbidden_paths/guard_roots = jail boundaries; bootstrap = docs seeded to every executor.",
+  "$comment": "Project registry: what the orchestrator may touch. repo = your git checkout; worktree_root = where task worktrees live; forbidden_paths/guard_roots = jail boundaries; bootstrap = docs seeded to every executor. project_actions = точные проектные разрешения (необязательно): команда допускается только при точном совпадении (env-присваивания по имени+pattern, argv без добавок, скрипт обычным файлом внутри worktree); env_fixed добавляется оркестратором при исполнении и не проходит через команду модели.",
   "example-project": {
     "repo": "$HOME/src/example-project",
     "protected_checkout": false,
@@ -24,6 +24,26 @@
       "production deploy",
       "docker/systemctl control"
     ],
-    "test_venv_python": ""
+    "test_venv_python": "",
+    "project_actions": {
+      "staging_deploy": {
+        "description": "штатный staging deploy (production не затрагивается); env_fixed указывает канонические env/данные вне worktree",
+        "mode": "writable",
+        "argv": [
+          "bash",
+          "ops/deploy-staging.sh"
+        ],
+        "env_from_model": [
+          {
+            "name": "STAGING_SHA",
+            "pattern": "^[0-9a-f]{40}$"
+          }
+        ],
+        "env_fixed": {
+          "STAGING_ENV_FILE": "~/src/example-project/.env.staging",
+          "STAGING_DATA_DIR": "~/src/example-project/data/staging"
+        }
+      }
+    }
   }
 }

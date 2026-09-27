@@ -41,8 +41,17 @@ for c in permissions routing; do
   cp "$src" "$ORCH_TEST_HOME/config/$c.json"
 done
 jq -n --arg repo "$REPO" --arg wtr "$SELFTEST_ROOT/worktrees" \
+  --arg dd "$SELFTEST_ROOT/deploydemo" \
   '{"example-project":{"repo":$repo, "protected_checkout":false, "worktree_root":$wtr, "default_branch":"master",
-    "bootstrap":[], "test_command":"true", "forbidden_paths":[".env","data/"], "guard_roots":[]}}' \
+    "bootstrap":[], "test_command":"true", "forbidden_paths":[".env","data/"], "guard_roots":[]},
+    "deploy-demo":{"repo":$dd, "protected_checkout":false, "worktree_root":$wtr, "default_branch":"master",
+      "bootstrap":[], "test_command":"true", "forbidden_paths":[".env"], "guard_roots":[],
+      "project_actions":{"staging_deploy":{
+        "description":"демо-действие секции 14 (универсальный механизм)",
+        "mode":"writable",
+        "argv":["bash","ops/deploy-demo.sh"],
+        "env_from_model":[{"name":"DEMO_SHA","pattern":"^[0-9a-f]{40}$"}],
+        "env_fixed":{"DEMO_FLAG":"from-config"}}}}}' \
   > "$ORCH_TEST_HOME/config/projects.json"
 export ORCH_ROOT="$ORCH_TEST_HOME"
 AGT="$ORCH_TEST_HOME/bin/task.sh"
@@ -694,9 +703,9 @@ rps=$(grep -c '"event":"RETRY"' "$MOCKROOT/case_8f/log.jsonl" 2>/dev/null || tru
 
 # --- 8y: примеры конфигурации соответствуют полям, которые читает код ---
 py_ex="$(jq -r '."example-project" | keys[]' "$REPO_ROOT/config/projects.example.json" | sort | tr '\n' ' ')"
-py_code="$(grep -oE "\.\(test_venv_[a-z_]+|worktree_root|default_branch|bootstrap|test_command|forbidden_paths|guard_roots|protected_checkout|repo\)" "$REPO_ROOT/bin/run_task.sh" | sort -u | sed 's/[.()]//g' | tr '\n' ' ')"
+py_code="$(grep -oE "\.\(test_venv_[a-z_]+|worktree_root|default_branch|bootstrap|test_command|forbidden_paths|guard_roots|protected_checkout|project_actions|repo\)" "$REPO_ROOT/bin/run_task.sh" | sort -u | sed 's/[.()]//g' | tr '\n' ' ')"
 [[ "$py_ex" == *test_venv_python* ]] && ok "8y example: test_venv_python (имя, читаемое кодом)" || bad "8y example поле venv: ожидался test_venv_python ($py_ex)"
-for f in repo worktree_root default_branch bootstrap test_command forbidden_paths guard_roots; do
+for f in repo worktree_root default_branch bootstrap test_command forbidden_paths guard_roots project_actions; do
   [[ "$py_ex" == *"$f"* ]] || bad "8y example не содержит $f"
 done && ok "8y example: значимые поля реестра присутствуют"
 
@@ -1018,6 +1027,86 @@ r2="$(bash "$AGW" route "напомни купить молоко" | jq -r .deci
 # 13g: обычные сообщения навык не трогают (route.py из секции 12) и wrapper не участвует
 [[ "$(python3 "$SKILL/route.py" "напомни купить молоко" | jq -r .decision)" == "NOT_PROJECT" ]] \
   && ok "13g ordinary messages untouched" || bad "13g"
+
+# --- 14: project actions (проектно-ограниченные разрешения; staging deploy) --
+# Универсальный механизм: реестр проекта описывает ТОЧНУЮ разрешённую форму
+# (env-префиксы модели по имени+pattern, argv без добавок, скрипт обычным
+# файлом внутри jail). Всё, что не совпало точно, — обычная цепочка DENY.
+DD="$SELFTEST_ROOT/deploydemo"; DDW="$SELFTEST_ROOT/worktrees/dd-14"
+git init -q -b master "$DD" 2>/dev/null || true
+mkdir -p "$DD/ops"
+printf '#!/usr/bin/env bash\nenv | grep -E "^(DEMO_SHA|DEMO_FLAG)=" | sort > deployed.marker\n' > "$DD/ops/deploy-demo.sh"
+chmod +x "$DD/ops/deploy-demo.sh"
+git -C "$DD" add -A && git -C "$DD" -c user.email=t@t -c user.name=t commit -qm init >/dev/null
+git -C "$DD" worktree add -q "$DDW" -b dd-14 2>/dev/null || git -C "$DD" worktree add "$DDW" -b dd-14 >/dev/null 2>&1 || true
+PA_JSON="$(jq -c '.["deploy-demo"].project_actions // empty' "$ORCH_TEST_HOME/config/projects.json")"
+GOOD_SHA="ff78fab000000000000000000000000000000000"   # ровно 40 hex
+DEPLOY_CMD="DEMO_SHA=$GOOD_SHA bash ops/deploy-demo.sh"
+pa() { ORCH_PROJECT_ACTIONS="$PA_JSON" GUARD_DENY_ROOTS="/srv/example-prod" guard_check "$1" "$2" "$3" 2>/dev/null; }
+pa_allow() { pa "$1" "$2" "$3" && ok "14 allow: $3" || bad "14 ожидался ALLOW, получили DENY: $3"; }
+pa_deny()  { pa "$1" "$2" "$3" || ok "14 deny: $3" || bad "14 ожидался DENY, получили ALLOW: $3"; }
+
+# ALLOW: точная форма (валидный 40-hex, точный argv, writable)
+pa_allow writable "$DDW" "$DEPLOY_CMD"
+
+# DENY: production-варианты остаются запрещены
+pa_deny writable "$DDW" "DEMO_SHA=$GOOD_SHA bash ops/deploy-prod.sh"
+pa_deny writable "$DDW" "DEMO_SHA=$GOOD_SHA bash ops/deploy-production.sh"
+pa_deny writable "$DDW" "bash /srv/example-prod/repo/ops/deploy-demo.sh"
+pa_deny read_only "$DDW" "$DEPLOY_CMD"
+# DENY: произвольный deploy script / другие имена
+pa_deny writable "$DDW" "DEMO_SHA=$GOOD_SHA bash ops/deploy-demo2.sh"
+pa_deny writable "$DDW" "DEMO_SHA=$GOOD_SHA bash my-deploy.sh"
+# DENY: добавки к команде
+pa_deny writable "$DDW" "DEMO_SHA=$GOOD_SHA bash ops/deploy-demo.sh --dry-run"
+pa_deny writable "$DDW" "DEMO_SHA=$GOOD_SHA DEMO_FLAG=x bash ops/deploy-demo.sh"
+# DENY: невалидный SHA (короткий/длинный/не-hex)
+pa_deny writable "$DDW" "DEMO_SHA=ff78fab bash ops/deploy-demo.sh"
+pa_deny writable "$DDW" "DEMO_SHA=${GOOD_SHA}3 bash ops/deploy-demo.sh"
+pa_deny writable "$DDW" "DEMO_SHA=xyz bash ops/deploy-demo.sh"
+# DENY: shell-обходы
+pa_deny writable "$DDW" "DEMO_SHA=$GOOD_SHA bash ops/deploy-demo.sh && echo done"
+pa_deny writable "$DDW" "DEMO_SHA=$GOOD_SHA bash ops/deploy-demo.sh; ls"
+pa_deny writable "$DDW" "DEMO_SHA=\$(id -u) bash ops/deploy-demo.sh"
+# DENY: без env / чужое имя env
+pa_deny writable "$DDW" "bash ops/deploy-demo.sh"
+pa_deny writable "$DDW" "DEMO_SHAX=$GOOD_SHA bash ops/deploy-demo.sh"
+# DENY: другой проект (без project_actions в реестре)
+ORCH_PROJECT_ACTIONS='{}' GUARD_DENY_ROOTS="/srv/example-prod" guard_check writable "$DDW" "$DEPLOY_CMD" 2>/dev/null \
+  && bad "14 другой проект: ALLOW (ожидался deny)" || ok "14 deny: проект без project_actions"
+# DENY: тот же проект, но jail другого проекта (скрипта там нет)
+pa_deny writable "$WT" "$DEPLOY_CMD"
+# DENY: symlink-подмена разрешённого скрипта
+mv "$DDW/ops/deploy-demo.sh" "$DDW/ops/deploy-demo.sh.real"
+ln -s /bin/true "$DDW/ops/deploy-demo.sh"
+pa_deny writable "$DDW" "$DEPLOY_CMD"
+mv "$DDW/ops/deploy-demo.sh.real" "$DDW/ops/deploy-demo.sh"
+
+# ALLOW + исполнение: run_guarded добавляет env_fixed из конфига действия
+rm -f "$DDW/deployed.marker"
+ORCH_PROJECT_ACTIONS="$PA_JSON" run_guarded writable "$DDW" 30 "$DEPLOY_CMD" "$SELFTEST_ROOT/pa_exec.log" 2>/dev/null
+pa_rc=$?
+if [[ -f "$DDW/deployed.marker" ]] && grep -q "DEMO_FLAG=from-config" "$DDW/deployed.marker" && grep -q "DEMO_SHA=$GOOD_SHA" "$DDW/deployed.marker"; then
+  ok "14 run_guarded исполнил действие; env_fixed из конфига доставлен"
+else
+  bad "14 исполнение действия не оставило ожидаемых следов (rc=$pa_rc)"
+fi
+
+# сквозной сценарий: run_task экспортирует project_actions из реестра проекта
+# и пишет audit-событие PROJECT_ACTION_ALLOWED
+jq -n --argjson checks '[]' --argjson og '[]' \
+  '{project:"deploy-demo", task_id:"SELF-14", goal:"selftest staging action", risk:"LOW", mode:"writable",
+    allowed_paths:["deployed.marker"], forbidden_paths:[".env"], bootstrap:[],
+    checks:$checks, owner_gates:$og, cleanup_worktree:true}' > "$MOCKROOT/t_14.json"
+: > "$MOCKROOT/f_14.jsonl"
+fixture_shell "$MOCKROOT/f_14.jsonl" "$DEPLOY_CMD"
+fixture_result "$MOCKROOT/f_14.jsonl" '{"action":"result","result":{"task_id":"SELF-14","status":"PASS","summary":"deployed","files_changed":["deployed.marker"],"checks":[],"decisions":[],"assumptions":[],"unresolved":[],"next":"none"}}'
+st="$(run_case "case_14" "$MOCKROOT/t_14.json" "$MOCKROOT/f_14.jsonl")"
+pae="$(grep -c '"event":"PROJECT_ACTION_ALLOWED"' "$MOCKROOT/case_14/log.jsonl" 2>/dev/null || true)"; pae=${pae:-0}
+[[ "$st" == "READY_FOR_OWNER_PASS" && "$pae" -ge 1 ]] \
+  && ok "14 run_task: действие разрешено, PROJECT_ACTION_ALLOWED в audit trail (status=$st)" \
+  || bad "14 run_task: status=$st audit_events=$pae"
+git -C "$DD" worktree remove --force "$DDW" >/dev/null 2>&1 || rm -rf "$DDW"
 
 # --- 10: human-readable owner report (представление; машинный RESULT не меняется) ---
 mk_owner_result() { # dir status extra-json
