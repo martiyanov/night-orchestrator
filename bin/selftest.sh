@@ -1106,6 +1106,16 @@ pae="$(grep -c '"event":"PROJECT_ACTION_ALLOWED"' "$MOCKROOT/case_14/log.jsonl" 
 [[ "$st" == "READY_FOR_OWNER_PASS" && "$pae" -ge 1 ]] \
   && ok "14 run_task: действие разрешено, PROJECT_ACTION_ALLOWED в audit trail (status=$st)" \
   || bad "14 run_task: status=$st audit_events=$pae"
+# промпт исполнителя знает о зарегистрированных действиях (иначе модель
+# отказывается выполнять разрешённое — реальный случай staging deploy):
+pctx="$MOCKROOT/case_14/SELF-14/prompt_ctx.txt"
+[[ -s "$pctx" ]] && grep -q "PROJECT ACTIONS" "$pctx" && grep -q "staging_deploy" "$pctx" && grep -q "ops/deploy-demo.sh" "$pctx" \
+  && ok "14 prompt_ctx публикует проектные действия (точная форма)" || bad "14 prompt_ctx без действий"
+grep -qi "project actions listed in the TASK CONTEXT" "$REPO_ROOT/prompts/executor_system.md" \
+  && ok "14 executor_system оговаривает исключение для проектных действий" || bad "14 executor_system без исключения"
+# задачи без действий не получают секцию (нет утечки в чужие проекты)
+grep -q "PROJECT ACTIONS" "$MOCKROOT/case_7b/SELF-7B/prompt_ctx.txt" 2>/dev/null \
+  && bad "14 чужой проект получил секцию действий!" || ok "14 без действий секции нет"
 git -C "$DD" worktree remove --force "$DDW" >/dev/null 2>&1 || rm -rf "$DDW"
 
 # --- 10: human-readable owner report (представление; машинный RESULT не меняется) ---

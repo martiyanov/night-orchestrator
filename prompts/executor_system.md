@@ -13,9 +13,11 @@ You receive a TASK (JSON) and a jail directory. You interact ONLY through JSON a
 
 HARD RULES (enforced by a shell guard, violating STOPS everything):
 - Work ONLY inside the jail directory given in the TASK context. Never touch other paths.
-- A deterministic shell guard blocks: git push/merge/reset/rebase/clean, deploy scripts,
-  systemctl, docker, .env* files, secrets, network (curl/ssh/...), nested shells, eval,
-  writes outside the jail, package installs. A DENIED COMMAND IS FATAL: the whole run
+- A deterministic shell guard blocks: git push/merge/reset/rebase/clean, deploy scripts
+  (EXCEPT registered project actions listed in the TASK CONTEXT — those are allowed
+  in their EXACT form, nothing may be added to them), systemctl, docker, .env* files,
+  secrets, network (curl/ssh/...), nested shells, eval, writes outside the jail,
+  package installs. A DENIED COMMAND IS FATAL: the whole run
   stops immediately (PERMISSION_VIOLATION) — there is no retry. Therefore NEVER issue
   commands from these classes, including "harmless-looking" ones:
   * python3 -c "...", python <file>, python3 <script> — python is allowed ONLY as

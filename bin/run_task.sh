@@ -199,6 +199,15 @@ build_context() { # -> $TASK_DIR/prompt_ctx.txt
     echo "MODE: $MODE  RISK: $RISK  PROJECT: $PROJECT  PROFILE: $PROFILE"
     echo "PRODUCTION CHECKOUT (never touch): $REPO"
     echo "PYTEST: python3 resolves to the project venv — 'python3 -m pytest' works directly."
+    if [[ -n "${ORCH_PROJECT_ACTIONS:-}" && "$ORCH_PROJECT_ACTIONS" != "{}" && "$MODE" == "writable" ]]; then
+      echo
+      echo "PROJECT ACTIONS registered for THIS project (the shell guard ALLOWS these"
+      echo "commands in EXACTLY this form — env assignments by name+format, argv with no"
+      echo "additions; extra env/args/options/;&&|\$()/redirects are FATAL denials):"
+      echo "$ORCH_PROJECT_ACTIONS" | jq -r 'to_entries[] | "- \(.key): " + ((.value.env_from_model // []) | map(.name + "=<" + (.pattern // ".*") + ">") | join(" ")) + " " + ((.value.argv // []) | join(" "))'
+      echo "FORBIDDEN paths in TASK mean: do NOT MODIFY/CREATE files there; executing a"
+      echo "registered project action above is allowed and is the intended exception."
+    fi
     echo
     echo "=== TASK ==="
     echo "$TASK_JSON" | jq .
