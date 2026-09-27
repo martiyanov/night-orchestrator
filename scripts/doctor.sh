@@ -43,6 +43,22 @@ done
 if [ -n "$CONF_NOTE" ]; then
   echo "  ПРИМЕЧАНИЕ: найдены только example-конфиги — скопируйте их в config/*.json и настройте (docs/CONFIGURATION.md)."
 fi
+# report.json: после install должен существовать и быть валидным; отсутствие
+# токена доставки — НЕ ошибка установки (Telegram может быть не настроен)
+RPT="$ROOT/config/report.json"
+if [ -f "$RPT" ]; then
+  if jq -e 'has("chat_id")' "$RPT" >/dev/null 2>&1; then
+    PASS=$((PASS+1)); echo "  ok: config/report.json структура валидна"
+  else
+    FAIL=$((FAIL+1)); echo "  FAIL: config/report.json: нет chat_id (структура)"
+  fi
+  _tk="$(jq -r '.report_token_cmd // ""' "$RPT" 2>/dev/null)"
+  if [ -n "$_tk" ]; then PASS=$((PASS+1)); echo "  ok: источник токена доставки настроен (значение не проверяется и не печатается)"
+  else PASS=$((PASS+1)); echo "  ok: доставка отчётов не настроена (это не ошибка; см. config/report.example.json)"
+  fi
+else
+  PASS=$((PASS+1)); echo "  ok: config/report.json отсутствует — доставка выключена по умолчанию (безопасно)"
+fi
 ck "execution_profile известен" "jq -e '.profiles[.execution_profile // \"balanced\"]' '$PRM' >/dev/null"
 ck "DEPLOY_ENABLED задан" "jq -e 'has(\"DEPLOY_ENABLED\")' '$PRM' >/dev/null"
 echo "== проекты реестра =="

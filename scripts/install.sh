@@ -37,16 +37,20 @@ fi
 say "источник: $SRC"
 say "цель:     $TARGET"
 run "mkdir -p '$TARGET'"
-for d in bin config contracts prompts docs examples scripts .github; do
+for d in bin contracts prompts docs examples scripts .github; do
   run "mkdir -p '$TARGET/$d' && cp -r '$SRC/$d/.' '$TARGET/$d/'"
 done
+# config: копируем ТОЛЬКО примеры (*.example.json) — развёрнутые локальные
+# конфиги источника (permissions/projects/report.json) не должны попадать
+# в новую установку и затирать пользовательские
+run "mkdir -p '$TARGET/config' && cp '$SRC'/config/*.example.json '$TARGET/config/'"
 run "rm -rf '$TARGET/bin/__pycache__'"
 for f in README.md VERSION CHANGELOG.md .gitignore .editorconfig; do
   run "cp '$SRC/$f' '$TARGET/$f'"
 done
 # рабочие каталоги и конфиги из примеров (только отсутствующие)
 for d in runs intake; do run "mkdir -p '$TARGET/$d'"; done
-for ex in permissions routing projects; do
+for ex in permissions routing projects report; do
   if [ -e "$TARGET/config/$ex.json" ]; then
     say "config/$ex.json существует — не перезаписываю"
   else

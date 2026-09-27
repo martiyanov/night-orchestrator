@@ -9,7 +9,6 @@
       "README.md"
     ],
     "test_command": "python3 -m pytest -q",
-    "test_venv_dir": "",
     "forbidden_paths": [
       ".env",
       ".env.*",
@@ -24,6 +23,7 @@
       "merge into default branch",
       "production deploy",
       "docker/systemctl control"
-    ]
+    ],
+    "test_venv_python": ""
   }
 }

@@ -637,6 +637,25 @@ st="$(run_case "case_8f" "$MOCKROOT/t_8f.json" "$MOCKROOT/f_8f.jsonl")"
 rps=$(grep -c '"event":"RETRY"' "$MOCKROOT/case_8f/log.jsonl" 2>/dev/null || true); rps=${rps:-0}
 [[ "$st" == "NO_CHANGE_REQUIRED" && "${rps:-0}" -eq 0 ]] && ok "8f valid RESULT accepted first try" || bad "8f status=$st retries=${rps:-0}"
 
+# --- 8y: примеры конфигурации соответствуют полям, которые читает код ---
+py_ex="$(jq -r '."example-project" | keys[]' "$REPO_ROOT/config/projects.example.json" | sort | tr '\n' ' ')"
+py_code="$(grep -oE "\.\(test_venv_[a-z_]+|worktree_root|default_branch|bootstrap|test_command|forbidden_paths|guard_roots|protected_checkout|repo\)" "$REPO_ROOT/bin/run_task.sh" | sort -u | sed 's/[.()]//g' | tr '\n' ' ')"
+[[ "$py_ex" == *test_venv_python* ]] && ok "8y example: test_venv_python (имя, читаемое кодом)" || bad "8y example поле venv: ожидался test_venv_python ($py_ex)"
+for f in repo worktree_root default_branch bootstrap test_command forbidden_paths guard_roots; do
+  [[ "$py_ex" == *"$f"* ]] || bad "8y example не содержит $f"
+done && ok "8y example: значимые поля реестра присутствуют"
+
+# 8y-2: install создаёт report.json из примера и не трогает существующий
+NO8Y="$(mktemp -d "$SELFTEST_ROOT/install8y.XXXX")"
+bash "$REPO_ROOT/scripts/install.sh" --target "$NO8Y" >/dev/null 2>&1
+[[ -f "$NO8Y/config/report.json" && -f "$NO8Y/config/projects.json" && -f "$NO8Y/config/permissions.json" && -f "$NO8Y/config/routing.json" ]] \
+  && ok "8y install создаёт все локальные конфиги (вкл. report.json)" || bad "8y install: конфиги неполны"
+grep -q "SET-OWNER-CHAT-ID" "$NO8Y/config/report.json" && ok "8y report.json безопасен по умолчанию (без токена)" || bad "8y report.json подозрителен"
+jq '.chat_id = "MY-CHAT"' "$NO8Y/config/report.json" > "$NO8Y/r.t" && mv "$NO8Y/r.t" "$NO8Y/config/report.json"
+bash "$REPO_ROOT/scripts/install.sh" --target "$NO8Y" >/dev/null 2>&1
+grep -q "MY-CHAT" "$NO8Y/config/report.json" && ok "8y повторный install не перезаписал пользовательский report.json" || bad "8y install затёр report.json"
+rm -rf "$NO8Y"
+
 # --- 8z: конфиг-инвариант: balanced hard-budget = 75 (TASK-7-07 postmortem) ---
 hb="$(jq -r '.profiles.balanced.task_hard_budget_minutes' "$ORCH_ROOT/config/permissions.json")"
 [[ "$hb" == "75" ]] && ok "8z balanced hard budget = 75min" || bad "8z balanced hard budget = $hb (ожидалось 75)"
