@@ -178,6 +178,16 @@ def handle(text, project):
                 "(точный коммит %s)." % (rid, sha[:7]),
                 execute="bash %s/bin/owner_action.sh handle orch1:pass:%s"
                         % (ORCH_ROOT, rid))
+        if state == "H" and rel.get("main_sha") and rel.get("production_sha") \
+                and rel["main_sha"] != rel["production_sha"]:
+            # main-поток: код в основной ветке, проверен на staging, но приёмка
+            # формально не зафиксирована — детерминированная фиксация
+            return _emit(
+                "accept",
+                "Фиксирую приёмку кода основной ветки (коммит %s) — он уже "
+                "проверен вами на staging." % rel["main_sha"][:7],
+                execute="%s %s/bin/release_flow.py accept-main --project %s"
+                        % (sys.executable, ORCH_ROOT, project))
         if state == "D":
             return _emit("question",
                          "Прогонов в приёмке нет: принятый код уже в основной "

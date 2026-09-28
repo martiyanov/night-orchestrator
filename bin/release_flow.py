@@ -291,6 +291,51 @@ class Flow:
                 return
         _die("якорь заметок не найден в %s" % p)
 
+    # ---------------------------------------------------- accept-main (0.3.1) --
+    def accept_main(self):
+        """Зафиксировать приёмку ТЕКУЩЕЙ основной ветки (main-поток разработки,
+        без run-контекста): эквивалент кнопки «✅ Принять изменения» для кода,
+        уже проверенного владельцем на staging. Ничего не деплоит."""
+        st = self.resolve()
+        if not (self.main_sha and self.production_sha
+                and self.main_sha != self.production_sha):
+            return self._print_human(
+                "Принимать нечего: в рабочем боте уже код текущей основной "
+                "ветки.", st)
+        if any(a.get("action") == self.accept_action
+               and a.get("sha") == self.main_sha
+               and a.get("status") == "executed" for a in _auths(self.project)):
+            return self._offer_after_accept_main(self.resolve(), already=True)
+        subprocess.run(["python3", os.path.join(ORCH_ROOT, "bin", "owner_auth.py"),
+                        "create", "--project", self.project,
+                        "--action", self.accept_action, "--sha", self.main_sha,
+                        "--source-note", "release flow accept-main"],
+                       capture_output=True, text=True, timeout=15, check=True)
+        subprocess.run(["python3", os.path.join(ORCH_ROOT, "bin", "owner_auth.py"),
+                        "consume", "--project", self.project,
+                        "--action", self.accept_action, "--sha", self.main_sha,
+                        "--result", "accepted (main flow)"],
+                       capture_output=True, text=True, timeout=15, check=True)
+        _audit("CODE_ACCEPTED_MAIN", {"project": self.project,
+                                      "sha": self.main_sha})
+        return self._offer_after_accept_main(self.resolve())
+
+    def _offer_after_accept_main(self, st, already=False):
+        print("Изменения приняты%s." % (" (ранее)" if already else ""))
+        print()
+        print("Нужно подготовить выпуск.")
+        self._offer({
+            "text": "Изменения приняты.\n\nНужно подготовить выпуск.",
+            "buttons": [
+                {"label": "📦 Подготовить выпуск", "action": {"type": "callback",
+                 "value": "orch1:release-prepare:now"}},
+                {"label": "⏸ Позже", "action": {"type": "callback",
+                 "value": "orch1:release-defer:x"}},
+                {"label": "📋 Подробнее", "action": {"type": "callback",
+                 "value": "orch1:release-details:x"}}]})
+        self._machine(st)
+        return 0
+
     # -------------------------------------------------------------- accept --
     def accept(self, sha7):
         st = self.resolve()
@@ -501,7 +546,8 @@ class Flow:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("cmd", choices=["state", "prepare", "accept", "deploy", "handle"])
+    ap.add_argument("cmd", choices=["state", "prepare", "accept", "accept-main",
+                                    "deploy", "handle"])
     ap.add_argument("--project", required=True)
     ap.add_argument("--sha")
     ap.add_argument("--step", choices=["minor", "patch"])
@@ -519,6 +565,8 @@ def main():
                             notes_en=a.notes_en, task_id=a.task_id)
     if a.cmd == "accept":
         return flow.accept(a.sha)
+    if a.cmd == "accept-main":
+        return flow.accept_main()
     if a.cmd == "deploy":
         return flow.deploy(a.sha)
     if a.cmd == "handle":

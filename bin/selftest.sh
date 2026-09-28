@@ -1867,6 +1867,18 @@ RF20 state --json | grep -q '"state": "H"' && f3=1
 [[ $f1 -eq 1 && $f2 -eq 1 && $f3 -eq 1 && $f4 -eq 1 ]] \
   && ok "20f deploy exact RC → H; ZERO coding-runs на всём пути" || bad "20f deploy/H f=$f1$f2$f3$f4 rc=$RC20"
 
+# 20l (main-поток): H + main впереди прода (docs-коммит) → «принимаю изменения» = accept-main → D
+printf '# todo v2\n' > "$DD20/state/TODO.md"; git -C "$DD20" add -A >/dev/null
+git -C "$DD20" -c user.email=t@t -c user.name=t commit -qm "docs drift" >/dev/null
+PH20 "принимаю изменения" > "$MOCKROOT/p20l.txt"
+grep -q "INTENT=accept" "$MOCKROOT/p20l.txt" \
+  && exec20 "$MOCKROOT/p20l.txt" | grep -q "release_flow.py accept-main" \
+  && ok "20l-1 main-поток: фраза приёмки → EXECUTE accept-main" || bad "20l-1 accept-main routing"
+bash -c "$(exec20 "$MOCKROOT/p20l.txt")" > "$MOCKROOT/rel20l.txt" 2>&1
+grep -q "Изменения приняты" "$MOCKROOT/rel20l.txt" && grep -q "Нужно подготовить выпуск" "$MOCKROOT/rel20l.txt" \
+  && RF20 state --json | grep -q '"state": "D"' \
+  && ok "20l-2 accept-main исполнен → D (offer подготовки выпуска)" || bad "20l-2 accept-main exec"
+
 # 20g (TEST 4): старый RC-токен после смены кандидата → stale
 S20B="$(mk20commit code-b)"
 OA20 create --project deploy-demo --action owner_accept_demo --sha "$S20B" >/dev/null
