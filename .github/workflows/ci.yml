@@ -38,7 +38,13 @@ jobs:
       - name: selftest (default)
         run: ./bin/selftest.sh
       - name: selftest (full)
-        run: ./bin/selftest.sh --full
+        run: |
+          set -o pipefail
+          ./bin/selftest.sh --full 2>&1 | tee /tmp/selftest-full.log || code=$?
+          grep "FAIL:" /tmp/selftest-full.log | while IFS= read -r line; do
+            echo "::error::${line:0:250}"
+          done
+          exit ${code:-0}
 
   release:
     name: Create GitHub Release
