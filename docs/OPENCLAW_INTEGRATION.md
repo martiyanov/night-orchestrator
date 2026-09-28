@@ -42,3 +42,16 @@ OpenClaw main → project skill (wake-word, напр. «Найт:») → bin/pro
   сам и не выполняет git/deploy в обход wrapper'а.
 
 Шаблон навыка: `examples/skills/example-project/`.
+
+## Приоритет lifecycle-фраз над intake (PROACTIVE-UX-RELEASE-ROUTING-1, 0.2.2)
+
+Решение владельца по жизненному циклу — не новая задача. Навык ОБЯЗАН
+до intake прогонять `bin/owner_phrase.py --project <id> --text "<сообщение>"`
+(обычно через подкоманду wrapper'а): INTENT=none → обычный intake-путь;
+INTENT=accept/deploy → выполнить ДОСЛОВНО команду из блока ===EXECUTE===
+(orch1:pass/deploy) и переслать ответ; INTENT=question — задать вопрос
+владельцу (список кандидатов / «сначала приёмка» / «нужен релизный
+коммит»). Никогда не переформулировать разрешение в «запусти …» и не
+создавать coding-run для merge/deploy. Ответ различает SHA: принятый на
+staging / текущая main / в рабочем боте — не называть фича-коммит
+«проверенной версией», если поверх есть обязательный fix.

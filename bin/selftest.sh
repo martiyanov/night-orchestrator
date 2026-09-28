@@ -1658,5 +1658,116 @@ grep -q "Тестовая версия ещё не выкладывалась" <
   && ok "18r run-level tasks/: проект определён, B-состояние" || bad "18r run-level layout не распознан"
 unset ORCH_AUTH_DIR ORCH_RUNS_DIR
 
+# --- 19: owner-lifecycle phrases (PROACTIVE-UX-RELEASE-ROUTING-1) -----------
+# Решения владельца («принимаю изменения»/«влей»/«выложи в рабочий бот») —
+# НЕ новые задачи: owner_phrase.py детерминированно маппит их на допустимые
+# действия жизненного цикла (orch1:pass/deploy через owner_action.sh) или
+# задаёт вопрос; автономный coding-run не создаётся; guard не менялся
+# (инцидентная команда «cat ops/deploy-prod.sh» остаётся FATAL).
+OWN19="$MOCKROOT/own19"; mkdir -p "$OWN19"
+AUTH19="$SELFTEST_ROOT/auth19"; rm -rf "$AUTH19"; mkdir -p "$AUTH19"
+export ORCH_AUTH_DIR="$AUTH19" ORCH_RUNS_DIR="$OWN19"
+OP19D() { python3 "$ORCH_ROOT/bin/owner_phrase.py" --project deploy-demo --text "$1"; }
+DD19="$SELFTEST_ROOT/deploydemo"
+mk19commit() { # -> stdout full sha; отдельный коммит+ветка
+  printf 'ux19 %s\n' "$1" > "$DD19/ux19.marker"
+  git -C "$DD19" add ux19.marker >/dev/null && git -C "$DD19" -c user.email=t@t -c user.name=t commit -qm "ux19 $1" >/dev/null
+  git -C "$DD19" branch -f "$1" HEAD >/dev/null 2>&1
+  git -C "$DD19" rev-parse HEAD
+}
+mk19run() { # run_id branch
+  local rd="$OWN19/$1"
+  mkdir -p "$rd/SELF-19" "$rd/tasks"
+  jq -n --arg sha "$(git -C "$DD19" rev-parse HEAD)" --arg br "$2" '{task_id:"SELF-19",
+    status:"READY_FOR_OWNER_PASS", summary:"s", files_changed:["ux19.marker"],
+    checks:[], decisions:[], assumptions:[], unresolved:[], next:"n",
+    commit_sha:$sha, branch:$br}' > "$rd/SELF-19/RESULT.json"
+  jq -n '{project:"deploy-demo", task_id:"SELF-19", goal:"g", risk:"LOW", mode:"writable",
+    allowed_paths:[], forbidden_paths:[], bootstrap:[], checks:[], owner_gates:[]}' > "$rd/tasks/task.json"
+  : > "$rd/log.jsonl"
+}
+runs19() { ls "$OWN19" | wc -l; }
+exec_line() { sed -n '/^===EXECUTE===$/{n;p}' "$1"; }
+
+# 19a (спец. D): обычная задача — не lifecycle-фраза, run не создаётся
+before19=$(runs19)
+out="$(OP19D "запусти TRAINING-PROGRESS-1")"
+grep -q "INTENT=none" <<<"$out" && [[ "$(runs19)" == "$before19" ]] \
+  && ok "19a «запусти X» → none (обычный intake-путь), run не создан" || bad "19a intent/run"
+
+# 19b (спец. A): «принимаю изменения» при awaiting_accept → accept+EXECUTE, без нового run
+S19B="$(mk19commit night19b)"
+mk19run 20260901-run19-b-01 night19b
+before19=$(runs19)
+OP19D "принимаю изменения" > "$MOCKROOT/o19b.txt"
+grep -q "INTENT=accept" "$MOCKROOT/o19b.txt" \
+  && exec_line "$MOCKROOT/o19b.txt" | grep -q "owner_action.sh handle orch1:pass:20260901-run19-b-01" \
+  && [[ "$(runs19)" == "$before19" ]] \
+  && ok "19b «принимаю изменения» → accept EXECUTE, run не создан" || bad "19b accept routing"
+
+# 19c (спец. B): «влей проверенную версию в основную ветку» → accept
+out="$(OP19D "влей проверенную версию в основную ветку")"
+echo "$out" > "$MOCKROOT/o19c.txt"
+grep -q "INTENT=accept" "$MOCKROOT/o19c.txt" \
+  && ok "19c «влей …» → accept" || bad "19c влей"
+
+# 19d (спец. E): «выложи … в рабочий бот» без приёмки → question, EXECUTE нет
+out="$(OP19D "разрешаю выложить текущую основную ветку в рабочий бот")"
+echo "$out" > "$MOCKROOT/o19d.txt"
+grep -q "INTENT=question" "$MOCKROOT/o19d.txt" && grep -q "приёмки ещё не было" "$MOCKROOT/o19d.txt" \
+  && ! grep -q "===EXECUTE===" "$MOCKROOT/o19d.txt" \
+  && ok "19d выкладка без приёмки → вопрос, действия нет" || bad "19d deploy без accept"
+
+# 19e (спец. C + §11): полная цепочка принимаю→выложи детерминированно, без coding-run
+bash -c "$(exec_line "$MOCKROOT/o19b.txt")" > "$MOCKROOT/o19e1.txt" 2>&1
+grep -q "Изменения добавлены в основную версию" "$MOCKROOT/o19e1.txt" \
+  && ok "19e-1 EXECUTE pass исполнен (OWNER PASS детерминированно)" || bad "19e-1 pass"
+out="$(OP19D "разрешаю подготовить релиз и выложить текущую основную ветку в рабочий бот")"
+echo "$out" > "$MOCKROOT/o19e2.txt"
+grep -q "INTENT=deploy" "$MOCKROOT/o19e2.txt" \
+  && exec_line "$MOCKROOT/o19e2.txt" | grep -q "owner_action.sh handle orch1:deploy:20260901-run19-b-01" \
+  && ok "19e-2 «выложи …» → deploy EXECUTE того же run" || bad "19e-2 deploy routing"
+before19=$(runs19)
+bash -c "$(exec_line "$MOCKROOT/o19e2.txt")" > "$MOCKROOT/o19e3.txt" 2>&1
+grep -q "Готово. Новая версия работает в рабочем боте." "$MOCKROOT/o19e3.txt" \
+  && [[ "$(runs19)" == "$before19" ]] \
+  && ok "19e-3 EXECUTE deploy исполнен; coding-run так и не создан" || bad "19e-3 deploy exec"
+
+# 19f (спец. F): два eligible → вопрос со списком, не угадываем
+S19F="$(mk19commit night19f)"
+mk19run 20260901-run19-f1-01 night19f
+mk19run 20260901-run19-f2-01 night19f
+out="$(OP19D "принимаю изменения")"
+echo "$out" > "$MOCKROOT/o19f.txt"
+grep -q "INTENT=question" "$MOCKROOT/o19f.txt" && grep -q "run19-f1-01" "$MOCKROOT/o19f.txt" \
+  && grep -q "run19-f2-01" "$MOCKROOT/o19f.txt" && ! grep -q "===EXECUTE===" "$MOCKROOT/o19f.txt" \
+  && ok "19f два кандидата → вопрос со списком" || bad "19f ambiguous"
+
+# 19g (спец. G): stale SHA → отказ при исполнении EXECUTE
+jq -n '{run_id:"20260901-run19-f1-01", sha:"3333333333333333333333333333333333333333"}' \
+  > "$OWN19/20260901-run19-f1-01/report_actions.json"
+out="$(bash -c "$(exec_line "$MOCKROOT/o19b.txt" | sed 's/run19-b-01/run19-f1-01/')" 2>&1)"
+grep -q "устарело" <<<"$out" \
+  && ok "19g устаревшее предложение не исполняется" || bad "19g stale"
+
+# 19h (спец. H): повторная выкладка — уже выполнено, side-effect один
+logsz="$(wc -l < "$OWN19/20260901-run19-b-01/owner_action.log" 2>/dev/null || echo 0)"
+out="$(bash -c "$(exec_line "$MOCKROOT/o19e2.txt")" 2>&1)"
+grep -q "уже работает в рабочем боте" <<<"$out" \
+  && [[ "$(wc -l < "$OWN19/20260901-run19-b-01/owner_action.log")" -le $((logsz + 2)) ]] \
+  && ok "19h повтор идемпотентен" || bad "19h double submit"
+
+# 19i (спец. I): guard не менялся — инцидентные команды остаются FATAL
+run_guarded writable "$WT" 10 "cat ops/deploy-prod.sh" "$MOCKROOT/19i.log" 2>/dev/null; r19i=$?
+[[ $r19i -eq 125 ]] && ok "19i guard: «cat ops/deploy-prod.sh» FATAL (как в инциденте)" || bad "19i rc=$r19i"
+
+# 19j (§6): main впереди прод-деплоя, релизного коммита нет → вопрос, не deploy
+mk19commit night19j >/dev/null
+out="$(OP19D "выложи текущую основную ветку в рабочий бот")"
+echo "$out" > "$MOCKROOT/o19j.txt"
+grep -q "релизного коммита" "$MOCKROOT/o19j.txt" && ! grep -q "===EXECUTE===" "$MOCKROOT/o19j.txt" \
+  && ok "19j без релизного коммита выкладка не предлагается" || bad "19j release gate"
+unset ORCH_AUTH_DIR ORCH_RUNS_DIR
+
 echo; echo "SELFTEST SUMMARY: PASS=$PASS FAIL=$FAIL"
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1
