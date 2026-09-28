@@ -104,6 +104,9 @@ P_MAX_COMPACTIONS="${ORCH_TEST_MAX_COMPACTIONS:-$P_MAX_COMPACTIONS}"
 # selftest-шов для no-write deadline (first_write_target_minutes): без него
 # ветку нельзя проверить детерминированно (реальные минуты ждать нельзя)
 P_FIRST_WRITE_MIN="${ORCH_TEST_FIRST_WRITE_MIN:-$P_FIRST_WRITE_MIN}"
+# recoverable shape-deny budget (SAFE-RETRY-1): сколько раз модель может
+# исправить форму команды (составные/не-allowlisted глагол) без смерти run
+P_SHAPE_DENY_MAX="${ORCH_TEST_SHAPE_DENY_MAX:-2}"
 MC_EXTRA_FLAGS=""
 # reasoning-budget ladder: один big-retry и одна strong-эскалация на RUN
 RB_BIG_USED=0; RB_SF_USED=0
@@ -372,7 +375,7 @@ agent_attempt() { # $1 = phase label
   rm -f "$TASK_DIR/attempt_result.json"
   start_attempt "$1" "${HANDOFF_FILE:-}"
   local turns=0 invalid_replies=0
-  local turns_since_write=0 reads_post_write=0 writes=0
+  local turns_since_write=0 reads_post_write=0 writes=0 shape_denies=0
   local read_calls=0 expl_deadline_noted=0 finalize_noted=0
   # per-phase read cap: implementer-фаза (taкeover) получает ещё меньше чтений
   local phase_read_cap="$P_MAX_READ_CALLS"
@@ -480,6 +483,24 @@ agent_attempt() { # $1 = phase label
         # audit: разрешённое проектное действие (точное совпадение с реестром)
         if [[ -n "${GUARD_MATCHED_ACTION:-}" ]]; then
           emit PROJECT_ACTION_ALLOWED "$(jq -cn --arg t "$TASK_ID" --arg a "$GUARD_MATCHED_ACTION" '{task_id:$t,action:$a}')"
+        fi
+        if [[ $grc -eq 126 ]]; then
+          # recoverable shape-deny: исходная команда НЕ исполнена; модель
+          # обязана повторить отдельными разрешёнными командами (≤ лимита).
+          # Внутренний эпизод: владельцу не красится (см. SAFE-RETRY-1 §9).
+          shape_denies=$((shape_denies+1))
+          emit GUARD_RECOVERABLE_DENIED "$(jq -cn --arg t "$TASK_ID" --arg r "${GUARD_LAST_DENY:-command shape}" --argjson n "$shape_denies" '{task_id:$t,reason:$r,attempt:$n}')"
+          { echo ">>> SYSTEM NOTE: DENY (recoverable): ${GUARD_LAST_DENY:-command shape}.";
+            echo "Исходная команда НЕ была исполнена: составные shell-команды (';', '&&', '||', '|') и эта форма запрещены.";
+            echo "Выполни нужные операции ОТДЕЛЬНЫМИ разрешёнными командами — ровно одна на вызов.";
+            echo "DENY не обходить: подбирай разрешённую форму (например, вместо неизвестного git-глагола — разрешённые git log/show/rev-parse/merge-base).";
+            echo; } >> "$TASK_DIR/history.txt"
+          if (( shape_denies > P_SHAPE_DENY_MAX )); then
+            { echo "PERMISSION_VIOLATION: recoverable shape-denies exhausted ($shape_denies > $P_SHAPE_DENY_MAX) — executor kept issuing forbidden command shapes"; echo "last denied: $cmd"; } > "$TASK_DIR/failure_evidence.txt"
+            emit PERMISSION_VIOLATION "$(jq -cn --arg t "$TASK_ID" --arg c "$(printf '%s' "$cmd" | head -c 120)" '{task_id:$t,cmd_head:$c}')"
+            return 125
+          fi
+          continue
         fi
         if [[ $grc -eq 125 ]]; then
           { echo "PERMISSION_VIOLATION: guard denied command (FATAL, no retry):"; echo "$cmd"; } > "$TASK_DIR/failure_evidence.txt"

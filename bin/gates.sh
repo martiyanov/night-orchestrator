@@ -8,6 +8,60 @@ ORCH_ROOT="${ORCH_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
 # ---------------------------------------------------------------- guard ----
 
+# _split_compound CMD — разбить команду на top-level части по ';', '&', '|'
+# и переводам строк ВНЕ кавычек. Печать JSON-массива частей; exit 1 —
+# структурная неопределённость (незакрытые кавычки, $(), backticks, top-level
+# скобки) — классификацию формы не доказать.
+_split_compound() {
+  python3 - "$1" <<'PYSPLIT'
+import json, sys
+s = sys.argv[1]
+parts, cur = [], []
+i, n, q = 0, len(s), None
+while i < n:
+    ch = s[i]
+    if q:
+        cur.append(ch)
+        if ch == q:
+            q = None
+        i += 1
+        continue
+    if ch in "'\"":
+        q = ch; cur.append(ch); i += 1; continue
+    if ch == "\\" and i + 1 < n:
+        cur.append(ch); cur.append(s[i+1]); i += 2; continue
+    if ch == "$" and i + 1 < n and s[i+1] == "(":
+        sys.exit(1)   # command substitution — не форма, а поверхность обхода
+    if ch == "`":
+        sys.exit(1)
+    if ch in ";|&\n":
+        parts.append("".join(cur)); cur = []
+        i += 1
+        continue
+    if ch in "()" and not cur:
+        sys.exit(1)   # subshell-скобки в начале части
+    cur.append(ch); i += 1
+if q is not None:
+    sys.exit(1)
+parts.append("".join(cur))
+print(json.dumps(parts))
+PYSPLIT
+}
+
+# _shape_recoverable MODE JAIL CMD — доказательство, что DENY относится ТОЛЬКО
+# к форме: каждая часть (включая одиночную команду) проходит ПОЛНЫЙ guard без
+# form-правила (git-verb allowlist; GUARD_FATAL_ONLY=1). Ни одна часть не
+# исполняется; это только консервативная классификация уже отклонённой команды.
+_shape_recoverable() {
+  local _parts _p
+  _parts="$(_split_compound "$3")" || return 1
+  while IFS= read -r _p; do
+    [[ -z "${_p// /}" ]] && continue
+    GUARD_FATAL_ONLY=1 GUARD_DENY_KIND="" guard_check "$1" "$2" "$_p" >/dev/null 2>&1 || return 1
+  done < <(printf '%s' "$_parts" | jq -r '.[]')
+  return 0
+}
+
 # _project_action_match CMD JAIL ACTIONS_JSON — точное совпадение команды с
 # проектным действием из реестра (project_actions). Печатает compact-JSON
 # {"name":...,"env_fixed":{...}} в stdout или пусто. Гарантии:
@@ -103,7 +157,10 @@ guard_check() {
   body="$(printf '%s' "$body" | sed -E 's#2?>{1,2} ?/dev/null# #g; s#&>{1,2} ?/dev/null# #g')"
 
   local re
-  _deny() { echo "guard: DENY pattern [$1] matched" >&2; return 1; }
+  _deny() { GUARD_LAST_DENY="$1"; echo "guard: DENY pattern [$1] matched" >&2; return 1; }
+  # таксономия DENY (SAFE-RETRY-1): fatal по умолчанию; form-правила помечают
+  # recoverable, run_guarded дополнительно доказывает security-чистоту частей
+  GUARD_DENY_KIND="fatal"; GUARD_LAST_DENY=""
 
   # --- project actions (проектно-ограниченные точные разрешения) ------------
   # Реестр проекта может описать действия (напр. штатный staging deploy):
@@ -368,7 +425,14 @@ guard_check() {
           _deny "git checkout without -b"; return 1
         fi ;;
       *)
-        _deny "git verb not allowlisted: $verb"; return 1 ;;
+        # form-правило (не security): неизвестный git-глагол. В probe-режиме
+        # (GUARD_FATAL_ONLY) пропускается — им _shape_recoverable доказывает,
+        # что причина DENY только в форме; иначе помечается recoverable
+        if [[ "${GUARD_FATAL_ONLY:-0}" != "1" ]]; then
+          GUARD_DENY_KIND="recoverable"
+          _deny "git verb not allowlisted: $verb"
+          return 1
+        fi ;;
     esac
   done
 
@@ -380,7 +444,16 @@ guard_check() {
 run_guarded() {
   local mode="$1" jail="$2" tmo="$3" cmd="$4" out="$5"
   GUARD_MATCHED_ACTION=""; GUARD_ACTION_ENV=""
-  if ! guard_check "$mode" "$jail" "$cmd"; then return 125; fi
+  if ! guard_check "$mode" "$jail" "$cmd"; then
+    # DENY-таксономия: form-only причина (и каждая часть security-чиста) →
+    # 126 recoverable: команда НЕ исполнена, run_task даёт модели исправить
+    # форму (≤P_SHAPE_DENY_MAX попыток). Любая security-причина → 125 FATAL.
+    if [[ "${GUARD_DENY_KIND:-fatal}" == "recoverable" ]] \
+       && _shape_recoverable "$mode" "$jail" "$cmd"; then
+      return 126
+    fi
+    return 125
+  fi
   # project action: добавить фиксированные env из spec (значения из реестра,
   # не из команды модели; без tab/переводов строк в значениях)
   local -a _act_env=()
