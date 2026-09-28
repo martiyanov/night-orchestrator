@@ -18,3 +18,47 @@ NEEDS_OWNER_INPUT, BLOCKED, FAILED, PERMISSION_VIOLATION.
 
 Ожидание завершения: `bin/task.sh wait <run-id>` — адаптивный опрос,
 мгновенный выход на терминальное состояние.
+
+## Жизненный цикл владельца (PROACTIVE-UX-1, 0.2.0)
+
+После завершения прогона детерминированный слой `bin/owner_action.sh`
+вычисляет состояние и ДОПУСТИМЫЕ следующие шаги (кнопки отчёта
+`orch1:<action>:<run_id>`; подписи — человеческие, внутренние имена
+действий владельцу не показываются):
+
+```
+A выполняется         → действий нет (только статус)
+B зелёные проверки, staging не выкладывался (роль staging в реестре)
+                      → [🧪 Выложить тестовую версию] [📋 Подробнее]
+C staging выложен / готово к приёмке
+                      → [✅ Принять изменения] [🔧 Вернуть на доработку] [📋 Подробнее]
+D изменения приняты (owner_accept executed)
+                      → [🚀 Выложить в рабочий бот] [⏸ Позже] [📋 Подробнее]
+E production обновлён (production_go executed)
+                      → «Готово. Новая версия работает в рабочем боте.»
+F блок/ошибка         → объяснение + [📋 Подробнее] (ложных действий нет)
+G повтор выполненного → нейтральный статус, НЕ ошибка (ALREADY_EXECUTED)
+stale (состояние изменилось с момента показа кнопки)
+                      → «предложение устарело» + актуальный статус,
+                        ничего не исполняется
+```
+
+Кнопка = явное решение владельца (семантика OWNER PASS / OWNER GO).
+Исполнение: `owner_auth.py create` (единственный механизм авторизации,
+второго нет) → зарегистрированное project_action точной формы (argv/env
+из реестра; SHA — из structured state прогона) → consume после успеха +
+audit в log.jsonl (PROJECT_ACTION_ALLOWED / PROJECT_ACTION_EXECUTED /
+PROJECT_ACTION_FAILED / OWNER_DECISION_RECORDED). Prior-action и
+SHA-границы проверяются повторно при каждом нажатии; HEAD основной ветки
+для production обязан совпадать с принятым SHA. «Вернуть на доработку» —
+marker-решение `.owner_decision.json` без git-действий.
+
+Команды: `bin/owner_action.sh status <run_id>` (жизненный цикл + шаги),
+`bin/owner_action.sh handle <callback_data>` (нажатие кнопки; формат
+строго `orch1:(pass|fix|details|staging|deploy|defer|status):<run_id>`).
+Выход: человеческий текст для владельца + машинный блок
+`===OWNER_ACTION_RESULT=== {json}` (state/actions) и после успешного
+шага — `===NEXT_OFFER=== {text, buttons}` для следующего сообщения.
+Отчёт (`report.sh`) прикладывает кнопки при `buttons: true`
+(config/report.json) и всегда пишет машинный `report_actions.json`
+(run_id, project, sha, branch, state — основа stale-сверки).

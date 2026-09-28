@@ -48,12 +48,14 @@ jq -n --arg repo "$REPO" --arg wtr "$SELFTEST_ROOT/worktrees" \
       "bootstrap":[], "test_command":"true", "forbidden_paths":[".env"], "guard_roots":[],
       "project_actions":{"staging_deploy":{
         "description":"демо-действие секции 14 (универсальный механизм)",
+        "ux_role":"staging",
         "mode":"writable",
         "argv":["bash","ops/deploy-demo.sh"],
         "env_from_model":[{"name":"DEMO_SHA","pattern":"^[0-9a-f]{40}$"}],
         "env_fixed":{"DEMO_FLAG":"from-config"}},
         "owner_accept_demo":{
           "description":"демо owner-action (секция 16)",
+          "ux_role":"accept",
           "mode":"writable",
           "argv":["bash","ops/owner-demo.sh"],
           "env_from_model":[{"name":"AG_ACCEPT_SHA","pattern":"^[0-9a-f]{40}$"}],
@@ -61,6 +63,7 @@ jq -n --arg repo "$REPO" --arg wtr "$SELFTEST_ROOT/worktrees" \
           "env_fixed":{"DEMO_MODE":"accept"}},
         "production_go_demo":{
           "description":"демо production_go (отдельная auth + prior owner_accept executed)",
+          "ux_role":"production",
           "mode":"writable",
           "argv":["bash","ops/owner-demo.sh"],
           "env_from_model":[{"name":"DEPLOY_SHA","pattern":"^[0-9a-f]{40}$"}],
@@ -1417,10 +1420,230 @@ bash "$ORCH_ROOT/bin/report.sh" --no-send "$MOCKROOT/rep_a" >/dev/null 2>&1
 after="$(md5sum "$MOCKROOT/rep_a/SELF-10/RESULT.json" | cut -d' ' -f1)"
 [[ "$before" == "$after" ]] && ok "10g RESULT.json не тронут рендером" || bad "10g RESULT изменён"
 
+# 10h: кнопки выключены по умолчанию (в тестовой инсталляции нет .buttons):
+# markup не строится, машинный report_actions.json строится всегда
+rd="$MOCKROOT/rep_h"; mkdir -p "$rd/SELF-10"; mk_owner_result "$rd/SELF-10" "READY_FOR_OWNER_PASS"
+bash "$ORCH_ROOT/bin/report.sh" --no-send "$rd" >/dev/null 2>&1
+if [[ ! -e "$rd/reply_markup.json" ]] \
+   && jq -e '.primary_status=="READY_FOR_OWNER_PASS" and .buttons_enabled==false and (.actions|length)==3
+       and ([.actions[].callback_data] | all(startswith("orch1:")))
+       and .actions[0].callback_data=="orch1:pass:"+$rid' --arg rid "${rd##*/}" \
+       "$rd/report_actions.json" >/dev/null 2>&1; then
+  ok "10h кнопки off по умолчанию; report_actions.json содержит orch1:pass/fix/details"
+else
+  bad "10h default buttons off"
+fi
+
+# 10i: ORCH_REPORT_BUTTONS=1 → reply_markup.json с orch1:pass/fix/details и run_id
+rd="$MOCKROOT/rep_i"; mkdir -p "$rd/SELF-10"; mk_owner_result "$rd/SELF-10" "READY_FOR_OWNER_PASS"
+ORCH_REPORT_BUTTONS=1 bash "$ORCH_ROOT/bin/report.sh" --no-send "$rd" >/dev/null 2>&1
+if jq -e '.inline_keyboard[0] | length==3
+    and .[0].callback_data=="orch1:pass:"+$rid and .[0].text=="✅ Принять изменения"
+    and .[1].callback_data=="orch1:fix:"+$rid and .[2].callback_data=="orch1:details:"+$rid' \
+    --arg rid "${rd##*/}" "$rd/reply_markup.json" >/dev/null 2>&1; then
+  ok "10i кнопки READY_FOR_OWNER_PASS: Принять/Вернуть/Подробнее с run_id"
+else
+  bad "10i markup for ready status"
+fi
+
+# 10j: статус без первичного действия (BLOCKED) — единственная кнопка «Подробнее»
+rd="$MOCKROOT/rep_j"; mkdir -p "$rd/SELF-10"; mk_owner_result "$rd/SELF-10" "BLOCKED"
+ORCH_REPORT_BUTTONS=1 bash "$ORCH_ROOT/bin/report.sh" --no-send "$rd" >/dev/null 2>&1
+if jq -e '.inline_keyboard[0] | length==1 and .[0].callback_data=="orch1:details:"+$rid' \
+    --arg rid "${rd##*/}" "$rd/reply_markup.json" >/dev/null 2>&1; then
+  ok "10j BLOCKED: единственная кнопка «Подробнее»"
+else
+  bad "10j details-only for blocked"
+fi
+
+# 10k: приоритет включателя: env ORCH_REPORT_BUTTONS=0 гасит config .buttons=true;
+# config true без env — кнопки включаются конфигом (умолчание ядра остаётся off)
+rd="$MOCKROOT/rep_k"; mkdir -p "$rd/SELF-10"; mk_owner_result "$rd/SELF-10" "READY_FOR_OWNER_PASS"
+echo '{"chat_id":"selftest","buttons":true}' > "$ORCH_ROOT/config/report.json"
+ORCH_REPORT_BUTTONS=0 bash "$ORCH_ROOT/bin/report.sh" --no-send "$rd" >/dev/null 2>&1
+[[ ! -e "$rd/reply_markup.json" ]] && ok "10k env 0 гасит config buttons=true" || bad "10k env override off"
+rd="$MOCKROOT/rep_k2"; mkdir -p "$rd/SELF-10"; mk_owner_result "$rd/SELF-10" "READY_FOR_OWNER_PASS"
+bash "$ORCH_ROOT/bin/report.sh" --no-send "$rd" >/dev/null 2>&1
+[[ -s "$rd/reply_markup.json" ]] && ok "10k2 config .buttons=true включает кнопки" || bad "10k2 config on"
+rm -f "$ORCH_ROOT/config/report.json"
+
+# 10l: формулировка next-action согласована с режимом кнопок
+grep -q "нажмите «✅ Принять изменения»" "$MOCKROOT/rep_k2/report.txt" \
+  && ! grep -q "словами в чате" "$MOCKROOT/rep_k2/report.txt" \
+  && ok "10l при кнопках текст ведёт к «✅ Принять изменения»" || bad "10l on-text mismatch"
+grep -q "дайте OWNER PASS (словами в чате)" "$MOCKROOT/rep_h/report.txt" \
+  && ok "10l2 без кнопок текст ведёт к словам владельца" || bad "10l2 off-text mismatch"
+
 # 7g: report idempotency — повторная отправка скипается маркером
 date -u +%FT%TZ > "$MOCKROOT/case_7f/.report_sent"
 out="$(bash "$ORCH_ROOT/bin/report.sh" "$MOCKROOT/case_7f" 2>&1)"
 [[ "$out" == *"already delivered"* ]] && ok "7g second report send skipped (idempotent)" || bad "7g double-send not prevented"
+
+# --- 18: owner UX-слой (PROACTIVE-UX-1): lifecycle-кнопки, stale, идемпотентность
+# Детерминированный owner_action.sh поверх owner_auth/реестра: кнопка = решение
+# владельца; исполнение — только зарегистрированное действие точной формы;
+# SHA из structured state; stale/двойное нажатие/ALREADY — безопасны.
+OWN18="$MOCKROOT/own18"; mkdir -p "$OWN18"
+AUTH18="$SELFTEST_ROOT/auth18"; rm -rf "$AUTH18"; mkdir -p "$AUTH18"
+export ORCH_AUTH_DIR="$AUTH18" ORCH_RUNS_DIR="$OWN18"
+OA18() { bash "$ORCH_ROOT/bin/owner_action.sh" "$@"; }
+DD18="$SELFTEST_ROOT/deploydemo"
+
+mk18commit() { # -> stdout full sha; отдельный коммит+ветка в deploydemo
+  printf 'ux18 %s\n' "$1" > "$DD18/ux18.marker"
+  git -C "$DD18" add ux18.marker >/dev/null && git -C "$DD18" -c user.email=t@t -c user.name=t commit -qm "ux18 $1" >/dev/null
+  git -C "$DD18" branch -f "$1" HEAD >/dev/null 2>&1
+  git -C "$DD18" rev-parse HEAD
+}
+mk18run() { # run_id branch [extra-result-json]
+  local rd="$OWN18/$1" extra="${3:-}"
+  [ -z "$extra" ] && extra='{}'
+  mkdir -p "$rd/SELF-18/tasks"
+  jq -n --arg sha "$(git -C "$DD18" rev-parse HEAD)" --arg br "$2" --argjson x "$extra" '{
+    task_id:"SELF-18", status:"READY_FOR_OWNER_PASS", summary:"ux18 ready",
+    files_changed:["ux18.marker"], checks:[{name:"full gate",status:"PASS",detail:"974 passed"}],
+    decisions:[], assumptions:[], unresolved:[], next:"n",
+    commit_sha:$sha, branch:$br} * $x' > "$rd/SELF-18/RESULT.json"
+  jq -n '{project:"deploy-demo", task_id:"SELF-18", goal:"g", risk:"LOW", mode:"writable",
+    allowed_paths:[], forbidden_paths:[".env"], bootstrap:[], checks:[], owner_gates:[]}' > "$rd/SELF-18/tasks/task.json"
+  : > "$rd/log.jsonl"
+}
+auth_cnt() { ls "$AUTH18" 2>/dev/null | wc -l; }
+
+# 18a (state A): прогона без RESULT — «ещё выполняется», действий нет
+mkdir -p "$OWN18/20260901-run-a-01/SELF-18/tasks"
+out="$(OA18 status 20260901-run-a-01)"
+grep -q "ещё выполняется" <<<"$out" && ok "18a A: статус «ещё выполняется»" || bad "18a нет текста A"
+out="$(OA18 handle orch1:pass:20260901-run-a-01)"
+grep -q "принимать пока нечего" <<<"$out" && ok "18a A: pass отклонён без действий" || bad "18a pass в состоянии A"
+[[ "$(auth_cnt)" == "0" ]] && ok "18a A: авторизаций не создано" || bad "18a лишние авторизации"
+
+# 18b (state B): READY без staging → предлагается только тестовая выкладка
+S18B="$(mk18commit night18b)"
+mk18run 20260901-run-b-01 night18b
+out="$(OA18 status 20260901-run-b-01)"
+grep -q "Тестовая версия ещё не выкладывалась" <<<"$out" \
+  && grep -q "orch1:staging:20260901-run-b-01" <<<"$out" \
+  && ! grep -q "orch1:pass:" <<<"$out" \
+  && ok "18b B: предлагается staging, accept не предлагается" || bad "18b B-состояние неверно"
+
+# 18c: кнопка staging исполняет зарегистрированное действие (SHA из state)
+out="$(OA18 handle orch1:staging:20260901-run-b-01)"
+grep -q "Тестовая версия выложена" <<<"$out" \
+  && grep -q "orch1:pass:20260901-run-b-01" <<<"$out" \
+  && ok "18c staging исполнен; далее предлагается accept" || bad "18c staging flow"
+grep -q '"event":"PROJECT_ACTION_EXECUTED"' "$OWN18/20260901-run-b-01/log.jsonl" \
+  && grep -q "DEMO_SHA=$S18B" "$DD18/deployed.marker" \
+  && ok "18c аудит прогона + точный SHA в исполнении" || bad "18c аудит/SHA"
+
+# 18d (state C): после staging — accept/fix/details
+out="$(OA18 status 20260901-run-b-01)"
+grep -q "orch1:pass:20260901-run-b-01" <<<"$out" && grep -q "orch1:fix:" <<<"$out" \
+  && ok "18d C: предлагается Принять/Вернуть/Подробнее" || bad "18d C-кнопки"
+
+# 18e: accept (OWNER PASS) — auth create→exec→consume, NEXT_OFFER deploy
+out="$(OA18 handle orch1:pass:20260901-run-b-01)"
+grep -q "Изменения добавлены в основную версию" <<<"$out" \
+  && grep -q "===NEXT_OFFER===" <<<"$out" && grep -q "orch1:deploy:20260901-run-b-01" <<<"$out" \
+  && ok "18e accept исполнен; NEXT_OFFER deploy" || bad "18e accept flow"
+ORCH_AUTH_DIR="$AUTH18" python3 "$REPO_ROOT/bin/owner_auth.py" list --all --project deploy-demo \
+  | jq -e --arg s "$S18B" 'select(.action=="owner_accept_demo" and .sha==$s and .status=="executed")' >/dev/null \
+  && ok "18e authorization owner_accept consumed" || bad "18e auth не в executed"
+
+# 18f: двойное нажатие — человеческий ALREADY, второго исполнения нет
+exe_before="$(jq -s 'map(select(.event=="PROJECT_ACTION_EXECUTED" and .action=="owner_accept_demo")) | length' "$OWN18/20260901-run-b-01/log.jsonl")"
+out="$(OA18 handle orch1:pass:20260901-run-b-01)"; rc18f=$?
+exe_after="$(jq -s 'map(select(.event=="PROJECT_ACTION_EXECUTED" and .action=="owner_accept_demo")) | length' "$OWN18/20260901-run-b-01/log.jsonl")"
+grep -q "уже выполнено" <<<"$out" && [[ $rc18f -eq 0 && "$exe_before" == "$exe_after" ]] \
+  && ok "18f повтор: ALREADY_EXECUTED по-человечески, side-effect 1" || bad "18f rc=$rc18f exe $exe_before->$exe_after"
+
+# 18g (state D): после accept — deploy/defer/details
+out="$(OA18 status 20260901-run-b-01)"
+grep -q "Выложить их в рабочий бот?" <<<"$out" && grep -q "orch1:deploy:" <<<"$out" \
+  && grep -q "orch1:defer:" <<<"$out" && ok "18g D: deploy/Позже/Подробнее" || bad "18g D-кнопки"
+
+# 18h: deploy (OWNER GO) — prior accept, отдельная auth, точный SHA
+out="$(OA18 handle orch1:deploy:20260901-run-b-01)"
+grep -q "Готово. Новая версия работает в рабочем боте." <<<"$out" \
+  && ok "18h deploy исполнен (E-сообщение)" || bad "18h deploy flow"
+ORCH_AUTH_DIR="$AUTH18" python3 "$REPO_ROOT/bin/owner_auth.py" list --all --project deploy-demo \
+  | jq -e --arg s "$S18B" 'select(.action=="production_go_demo" and .sha==$s and .status=="executed")' >/dev/null \
+  && grep -q "mode=production" "$OWN18/20260901-run-b-01/owner_action.log" \
+  && ok "18h production_go: отдельная auth consumed, точный SHA/mode" || bad "18h auth/mode"
+
+# 18i: deploy повтор — нейтральный ALREADY (E), повторного исполнения нет
+log_size="$(wc -l < "$OWN18/20260901-run-b-01/owner_action.log")"
+out="$(OA18 handle orch1:deploy:20260901-run-b-01)"; rc18i=$?
+[[ $rc18i -eq 0 ]] && grep -q "уже работает в рабочем боте" <<<"$out" \
+  && [[ "$(wc -l < "$OWN18/20260901-run-b-01/owner_action.log")" -le $((log_size + 2)) ]] \
+  && ok "18i повтор deploy: нейтральный ответ без исполнения" || bad "18i повтор исполнил снова"
+
+# 18j: stale callback — SHA в старом сообщении не совпадает с текущим
+S18J="$(mk18commit night18j)"
+mk18run 20260901-run-j-01 night18j
+jq -n --arg r "20260901-run-j-01" '{run_id:$r, sha:"2222222222222222222222222222222222222222"}' \
+  > "$OWN18/20260901-run-j-01/report_actions.json"
+auths_before="$(auth_cnt)"
+out="$(OA18 handle orch1:pass:20260901-run-j-01)"
+grep -q "устарело" <<<"$out" && [[ "$(auth_cnt)" == "$auths_before" ]] \
+  && ok "18j stale: отказ без исполнения" || bad "18j stale не сработал"
+
+# 18k: deploy без prior accept — вежливый отказ (действие недоступно)
+S18K="$(mk18commit night18k)"
+mk18run 20260901-run-k-01 night18k
+auths_before="$(auth_cnt)"
+out="$(OA18 handle orch1:deploy:20260901-run-k-01)"
+grep -q "Сначала нужно принять" <<<"$out" && [[ "$(auth_cnt)" == "$auths_before" ]] \
+  && ok "18k deploy без accept: отказ, auth не создана" || bad "18k prior-gate"
+
+# 18l: «Вернуть на доработку» — без git-действий, marker-решение, deploy исчезает
+out="$(OA18 handle orch1:fix:20260901-run-k-01)"
+grep -q "возвращаю задачу на доработку" <<<"$out" && [ -f "$OWN18/20260901-run-k-01/.owner_decision.json" ] \
+  && ok "18l fix: marker-решение записано" || bad "18l fix"
+out="$(OA18 status 20260901-run-k-01)"
+grep -q "на доработку" <<<"$out" && ! grep -q "orch1:deploy:" <<<"$out" && ! grep -q "orch1:pass:" <<<"$out" \
+  && ok "18l после fix: accept/deploy не предлагаются" || bad "18l кнопки не исчезли"
+out="$(OA18 handle orch1:pass:20260901-run-k-01)"
+grep -q "уже возвращена" <<<"$out" && ok "18l pass после fix отклонён" || bad "18l pass после fix"
+
+# 18m: «Подробнее» — никаких действий/авторизаций
+auths_before="$(auth_cnt)"
+log18m="$(wc -l < "$OWN18/20260901-run-k-01/log.jsonl")"
+out="$(OA18 handle orch1:details:20260901-run-k-01)"
+grep -q "Задача: SELF-18" <<<"$out" && grep -q "Коммит:" <<<"$out" \
+  && grep -q "Следующий допустимый шаг" <<<"$out" \
+  && [[ "$(auth_cnt)" == "$auths_before" && "$(wc -l < "$OWN18/20260901-run-k-01/log.jsonl")" == "$log18m" ]] \
+  && ok "18m details: только чтение" || bad "18m side effects"
+
+# 18n: malformed callback/run_id — строгий отказ
+bad18=0
+for cb in "orch1:pass:../../etc" "orch1:hacker:20260901-run-k-01" "report:accept:x" "orch1:pass:" "orch1:pass:UPPER-CASE"; do
+  OA18 handle "$cb" >/dev/null 2>&1; [[ $? -eq 2 ]] || { bad18=1; bad "18n прошло: $cb"; }
+done
+OA18 status "bad/id" >/dev/null 2>&1; [[ $? -eq 2 ]] || { bad18=1; bad "18n плохой run_id прошёл"; }
+[[ $bad18 -eq 0 ]] && ok "18n malformed callback/run_id: отказ (rc=2)"
+
+# 18o: executor не может вызвать owner-слой (вне jail)
+run_guarded writable "$WT" 10 "bash $ORCH_ROOT/bin/owner_action.sh handle orch1:pass:x" "$MOCKROOT/18o.log" 2>/dev/null; r18o=$?
+[[ $r18o -eq 125 ]] && ok "18o owner_action.sh из executor — FATAL 125" || bad "18o rc=$r18o (ожидался 125)"
+
+# 18p: RESULT с next_actions — обратная совместимость рендера и контракта
+S18P="$(mk18commit night18p)"
+mk18run 20260901-run-p-01 night18p '{"next_actions":[{"id":"accept_changes","action":"owner_accept","label":"Принять изменения","requires_confirmation":true}]}'
+ORCH_REPORT_BUTTONS=1 bash "$ORCH_ROOT/bin/report.sh" --no-send "$OWN18/20260901-run-p-01" >/dev/null 2>&1
+jq -e '.next_actions[0].id=="accept_changes"' "$OWN18/20260901-run-p-01/SELF-18/RESULT.json" >/dev/null \
+  && jq -e '.actions | length==2' "$OWN18/20260901-run-p-01/report_actions.json" >/dev/null \
+  && ok "18p next_actions tolerated; B-кнопки (staging+details)" || bad "18p next_actions/render"
+
+# 18q: report C-состояния (staging уже был) — accept/fix/details
+S18Q="$(mk18commit night18q)"
+mk18run 20260901-run-q-01 night18q
+echo '{"ts":"2026-01-01T00:00:00Z","event":"PROJECT_ACTION_ALLOWED","task_id":"SELF-18","action":"staging_deploy"}' >> "$OWN18/20260901-run-q-01/log.jsonl"
+ORCH_REPORT_BUTTONS=1 bash "$ORCH_ROOT/bin/report.sh" --no-send "$OWN18/20260901-run-q-01" >/dev/null 2>&1
+jq -e '[.actions[].action] == ["pass","fix","details"]' "$OWN18/20260901-run-q-01/report_actions.json" >/dev/null \
+  && grep -q "нажмите «✅ Принять изменения»" "$OWN18/20260901-run-q-01/report.txt" \
+  && ok "18q C-отчёт: Принять/Вернуть/Подробнее + человеческий текст" || bad "18q C-отчёт"
+unset ORCH_AUTH_DIR ORCH_RUNS_DIR
 
 echo; echo "SELFTEST SUMMARY: PASS=$PASS FAIL=$FAIL"
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1

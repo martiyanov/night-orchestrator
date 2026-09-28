@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.2.0
+
+- **Проактивный UX владельца** (PROACTIVE-UX-1): после значимого этапа
+  система предлагает понятные следующие шаги кнопками — владелец не
+  должен помнить внутренние команды (OWNER PASS/GO). Слои: ядро
+  вычисляет состояние и допустимые действия; интеграция/OpenClaw
+  рисует кнопки и ведёт диалог; безопасность в коде, не в промптах.
+- `bin/owner_action.sh` — детерминированный диспетчер владельца:
+  `status <run_id>` (жизненный цикл A–G + допустимые шаги) и
+  `handle <callback_data>` (строгий формат `orch1:<act>:<run_id>`).
+  Кнопка = явное решение владельца; второй механизм авторизации НЕ
+  вводится — используется существующий owner_auth (create → исполнение
+  зарегистрированного project_action точной формы → consume + audit
+  PROJECT_ACTION_ALLOWED/EXECUTED/FAILED в log.jsonl прогона). SHA —
+  только из structured state. Stale-safe: статус RESULT, SHA ветки vs
+  отчётный, prior-action (production только после executed
+  owner_accept того же SHA), HEAD основной ветки == принятому SHA;
+  устаревшее предложение не исполняется. Повтор выполненного —
+  нейтральный no-op (человеческий ALREADY, exit 0). «Вернуть на
+  доработку» — marker-решение `.owner_decision.json` без git-действий.
+  Executor слой вызвать не может (вне task-worktree, jail-guard FATAL —
+  тест 18o).
+- `bin/report.sh`: lifecycle-кнопки следующего шага (B: «🧪 Выложить
+  тестовую версию» если роль staging в реестре и staging не выкладывался;
+  C: «✅ Принять изменения / 🔧 Вернуть на доработку / 📋 Подробнее»;
+  прочие статусы — только «Подробнее»), включаются `buttons: true` в
+  config/report.json или env ORCH_REPORT_BUTTONS (по умолчанию ВЫКЛ —
+  текстовый цикл не меняется). Всегда пишется машинный
+  `report_actions.json` (run_id, project, sha, branch, state, actions) —
+  основа stale-сверки; `reply_markup.json` для отправки.
+- Контракт RESULT: необязательное поле `next_actions`
+  ([{id, action, label?, requires_confirmation?}]) — подсказки для
+  человеческого UI; авторитет допустимых действий остаётся за ядром;
+  старые consumers не затронуты (additionalProperties).
+- Реестр: необязательное `ux_role` (staging|accept|production) у
+  project_actions для маппинга кнопок; guard поле игнорирует.
+- Фикс `bin/owner_auth.py`: флаг `--all` не требовал значение, хотя
+  задокументирован как флаг (`list --all --project X` падал «неожиданный
+  аргумент»).
+- Самопроверка: секция 18 (24 проверки) — lifecycle A/B/C/D/E/F/FIX,
+  stale-SHA, двойное нажатие (side-effect 1), ALREADY-нейтральность,
+  deploy без prior, fix убирает deploy, «Подробнее» без side-effects,
+  malformed callback/run_id, executor-вызов FATAL, next_actions
+  tolerated, C/B-рендер отчёта. Итог локально: full 412/3 — три
+  (8b/9a/9c) воспроизводятся на чистом 0.1.7 в этом окружении
+  (mock-fixture exhaustion rc=44, дрейф числа вызовов) и не связаны с
+  изменением; CI — авторитетный гейт.
+
 ## 0.1.7
 
 - **Same-run ALREADY_EXECUTED** (OWNER-ACTION-IDEMPOTENCY-1): повтор

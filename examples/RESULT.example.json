@@ -13,6 +13,10 @@
   "writes": 3,
   "commit_sha": "ab12cd3",
   "next": "review", "next_action": "owner review of the diff, then OWNER PASS",
+  "next_actions": [
+    {"id": "accept_changes", "action": "owner_accept", "label": "Принять изменения", "requires_confirmation": true},
+    {"id": "request_changes", "action": null, "label": "Вернуть на доработку"}
+  ],
   "attempts": 2, "risk": "MEDIUM", "mode": "writable",
   "execution_profile": "balanced", "executor_model_final": "zai/glm-5.3"
 }

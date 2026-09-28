@@ -14,7 +14,31 @@ OpenClaw main → project skill (wake-word, напр. «Найт:») → bin/pro
   сообщения идут мимо; неоднозначное — вопрос-подтверждение.
 - Безопасный вход: один wrapper `bin/project.sh` (Allow-Always на его
   префикс), никаких прямых python3 из навыка.
-- Отчёты оркестратора доставляются владельцу (report.sh), OWNER PASS/GO —
-  словами владельца, кнопки с ними не связаны.
+- Отчёты оркестратора доставляются владельцу (report.sh).
+
+## Кнопки следующего шага (PROACTIVE-UX-1, 0.2.0)
+
+Владелец не должен знать внутренние команды (OWNER PASS/GO, SHA): после
+значимого этапа система сама предлагает понятные следующие шаги.
+
+- `report.sh` при `buttons: true` (config/report.json) прикладывает к
+  отчёту inline-кнопки с `callback_data = orch1:<action>:<run_id>`
+  (подписи человеческие; допустимые действия вычисляются из статуса
+  RESULT и реестра проекта — см. docs/EXECUTION_LIFECYCLE.md).
+- Нажатие кнопки платформа владельца доставляет агенту текстом
+  (OpenClaw: «callback_data: orch1:…» pass-through). Навык передаёт его
+  в ЕДИНЫЙ вход wrapper'а (`project.sh callback "<data>"`), тот — в
+  `bin/owner_action.sh handle`, который перепроверяет состояние
+  (stale/prior/SHA/уже-выполнено) и исполняет ТОЛЬКО зарегистрированное
+  действие через owner_auth (см. docs/SAFETY_MODEL.md, контур 7).
+- Ответ wrapper'а (человеческий текст) пересылается владельцу как есть;
+  блок `===NEXT_OFFER=== {text, buttons}` — отправляется как новое
+  сообщение с кнопками (Telegram message action + presentation;
+  требуется `channels.telegram.actions.sendMessage`).
+- Правила языка: внутренние термины (OWNER PASS/GO, project_action,
+  SHA, PERMISSION_VIOLATION, ALREADY_EXECUTED) владельцу не
+  показываются — только человеческие формулировки; техника доступна в
+  «📋 Подробнее»/диагностике. Навык никогда не конструирует callback_data
+  сам и не выполняет git/deploy в обход wrapper'а.
 
 Шаблон навыка: `examples/skills/example-project/`.

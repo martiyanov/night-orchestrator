@@ -197,6 +197,10 @@ def main():
         k = sys.argv[i]
         if not k.startswith("--"):
             _die(f"неожиданный аргумент: {k}")
+        if k == "--all":  # булев флаг (без значения)
+            args["all"] = "true"
+            i += 1
+            continue
         if i + 1 >= len(sys.argv):
             _die(f"{k} требует значение")
         args[k[2:].replace("-", "_")] = sys.argv[i + 1]

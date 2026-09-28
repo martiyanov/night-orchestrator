@@ -1,5 +1,5 @@
 {
-  "$comment": "Project registry: what the orchestrator may touch. repo = your git checkout; worktree_root = where task worktrees live; forbidden_paths/guard_roots = jail boundaries; bootstrap = docs seeded to every executor. project_actions = точные проектные разрешения (необязательно): команда допускается только при точном совпадении (env-присваивания по имени+pattern, argv без добавок, скрипт обычным файлом внутри worktree); env_fixed добавляется оркестратором при исполнении и не проходит через команду модели.",
+  "$comment": "Project registry: what the orchestrator may touch. repo = your git checkout; worktree_root = where task worktrees live; forbidden_paths/guard_roots = jail boundaries; bootstrap = docs seeded to every executor. project_actions = точные проектные разрешения (необязательно): команда допускается только при точном совпадении (env-присваивания по имени+pattern, argv без добавок, скрипт обычным файлом внутри worktree); env_fixed добавляется оркестратором при исполнении и не проходит через команду модели. ux_role (необязательно) связывает действие с UX-ролью владельца (staging|accept|production) для кнопок следующего шага (bin/owner_action.sh); guard это поле игнорирует.",
   "example-project": {
     "repo": "$HOME/src/example-project",
     "protected_checkout": false,
@@ -28,6 +28,7 @@
     "project_actions": {
       "staging_deploy": {
         "description": "штатный staging deploy (production не затрагивается); env_fixed указывает канонические env/данные вне worktree",
+        "ux_role": "staging",
         "mode": "writable",
         "argv": [
           "bash",
@@ -46,6 +47,7 @@
       },
       "owner_accept": {
         "description": "OWNER PASS как проектное действие: ff-only merge принятого SHA в основную ветку + push; только при активной authorization владельца",
+        "ux_role": "accept",
         "mode": "writable",
         "argv": [
           "bash",
@@ -68,6 +70,7 @@
       },
       "production_go": {
         "description": "OWNER GO как отдельное проектное действие: штатный production deploy точного SHA (требует ОТДЕЛЬНУЮ authorization; guard_roots не ослабляются)",
+        "ux_role": "production",
         "mode": "writable",
         "argv": [
           "bash",

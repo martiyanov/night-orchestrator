@@ -114,6 +114,35 @@
     },
     "next_action": {
       "type": "string"
+    },
+    "next_actions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "action"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "action": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "requires_confirmation": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": true
+      },
+      "$comment": "PROACTIVE-UX-1: optional executor hints for human-facing next steps. Authoritative allowed actions remain core-computed lifecycle (bin/owner_action.sh); consumers must ignore unknown/extra fields."
     }
   },
   "additionalProperties": true,

@@ -56,6 +56,16 @@ Production deploy остаётся запрещённым универсальн
 (паттерны deploy, guard_roots) для ВСЕХ проектов; `project_actions` —
 точечное разрешение, а не ослабление общих запретов.
 
+### UX-роли и кнопки владельца (PROACTIVE-UX-1, 0.2.0)
+Необязательное поле действия `"ux_role": "staging" | "accept" |
+"production"` связывает проектное действие с кнопкой следующего шага
+(guard это поле игнорирует; без него кнопки этого типа проекту не
+предлагаются). Кнопки отчёта включаются `"buttons": true` в
+`config/report.json` (переопределяется env `ORCH_REPORT_BUTTONS`).
+Обработка нажатий — `bin/owner_action.sh handle orch1:<act>:<run_id>`
+(обычно вызывается проектным навыком; см. docs/EXECUTION_LIFECYCLE.md
+и docs/SAFETY_MODEL.md, контур 7).
+
 ## permissions.json — политика исполнения
 `execution_profile` (fast/balanced/economy) и per-profile бюджеты:
 max_agent_turns, task_hard_budget_minutes, exploration limits
