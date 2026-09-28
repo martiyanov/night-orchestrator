@@ -1643,6 +1643,19 @@ ORCH_REPORT_BUTTONS=1 bash "$ORCH_ROOT/bin/report.sh" --no-send "$OWN18/20260901
 jq -e '[.actions[].action] == ["pass","fix","details"]' "$OWN18/20260901-run-q-01/report_actions.json" >/dev/null \
   && grep -q "нажмите «✅ Принять изменения»" "$OWN18/20260901-run-q-01/report.txt" \
   && ok "18q C-отчёт: Принять/Вернуть/Подробнее + человеческий текст" || bad "18q C-отчёт"
+# 18r: реальная раскладка прогонов (TASK в <run>/tasks, RESULT в <run>/<TASK>/)
+# — проект определяется и для неё (фикс 0.2.1)
+S18R="$(mk18commit night18r)"
+rd18r="$OWN18/20260901-run-r-01"; mkdir -p "$rd18r/SELF-18R" "$rd18r/tasks"
+jq -n --arg sha "$S18R" --arg br night18r '{task_id:"SELF-18R", status:"READY_FOR_OWNER_PASS",
+  summary:"s", files_changed:["ux18.marker"], checks:[{name:"g",status:"PASS",detail:"1 passed"}],
+  decisions:[], assumptions:[], unresolved:[], next:"n", commit_sha:$sha, branch:$br}' > "$rd18r/SELF-18R/RESULT.json"
+jq -n '{project:"deploy-demo", task_id:"SELF-18R", goal:"g", risk:"LOW", mode:"writable",
+  allowed_paths:[], forbidden_paths:[], bootstrap:[], checks:[], owner_gates:[]}' > "$rd18r/tasks/task.json"
+: > "$rd18r/log.jsonl"
+out="$(OA18 status 20260901-run-r-01)"
+grep -q "Тестовая версия ещё не выкладывалась" <<<"$out" \
+  && ok "18r run-level tasks/: проект определён, B-состояние" || bad "18r run-level layout не распознан"
 unset ORCH_AUTH_DIR ORCH_RUNS_DIR
 
 echo; echo "SELFTEST SUMMARY: PASS=$PASS FAIL=$FAIL"

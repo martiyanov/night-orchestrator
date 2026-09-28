@@ -59,8 +59,8 @@ result_file() { # run_dir -> path (stdout)
 
 project_of_run() { # run_dir -> project (stdout)
   local d f p
-  for d in "$1"/*/; do
-    for f in "$d"/tasks/*.json; do
+  for d in "$1"/*/ "$1"/; do
+    for f in "$d"tasks/*.json; do
       [ -f "$f" ] || continue
       p="$(jq -r '.project // empty' "$f" 2>/dev/null)" || continue
       [ -n "$p" ] && { printf '%s\n' "$p"; return 0; }
