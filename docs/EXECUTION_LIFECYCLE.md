@@ -88,3 +88,11 @@ app-код — STOP до повторной приёмки). Не требует
 Callback-неймспейс выпуска: `orch1:release-(prepare|accept|deploy|defer|
 details|status):(now|<rc7>|x)` — обрабатывается release_flow.py handle
 (stale/already-safe).
+
+### Gate подготовки выпуска (0.3.6)
+
+Канонический gate в prepare — в ИЗОЛИРОВАННОМ временном git-worktree от
+HEAD с применёнными release-правками и PATH из test_venv_python (не в
+основном чекауте проекта: там могут быть bind-mounted данные/окружение
+прода). Провал gate → release-коммит не создаётся, временные правки
+восстанавливаются, аудит хранит первый реальный FAIL.

@@ -40,6 +40,8 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
+import shutil
 
 ORCH_ROOT = os.environ.get("ORCH_ROOT") or os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -234,17 +236,21 @@ class Flow:
         self._insert_notes(new_ver, notes)
         gate = self.cfg.get("gate_command") or self.prof.get("test_command")
         if gate:
-            rc_proc = subprocess.run(gate, shell=True, cwd=self.repo,
-                                     capture_output=True, text=True, timeout=3600)
-            if rc_proc.returncode != 0:
+            # TP1-RELEASE-GATE-FAILURE: канонический gate гоняется в
+            # ИЗОЛИРОВАННОМ временном worktree (не в основном чекауте с
+            # bind-mounted data/) и с проектным venv в PATH; во worktree
+            # применяются те же временные release-правки
+            gate_ok, gate_tail = self._run_gate_isolated(gate, new_ver)
+            if not gate_ok:
                 _git(self.repo, "checkout", "--",
                      *(self.cfg.get("version_files") or ["VERSION"]),
                      self.cfg.get("notes_file", "NOTES.py"))
                 _audit("RELEASE_GATE_FAILED", {"project": self.project,
-                                               "version": new_ver})
+                                               "version": new_ver,
+                                               "tail": gate_tail[:400]})
                 return self._print_human(
                     "❌ Канонические проверки не прошли — release-коммит не создан, "
-                    "файлы восстановлены.", st)
+                    "файлы восстановлены.\nПервое реальное падение:\n" + gate_tail, st)
         _git(self.repo, "add", *((self.cfg.get("version_files") or ["VERSION"])
                                  + [self.cfg.get("notes_file", "NOTES.py")] ))
         subj = task_id or new_ver
@@ -257,6 +263,50 @@ class Flow:
         _audit("RELEASE_PREPARED", {"project": self.project, "version": new_ver,
                                     "rc_sha": rc_sha})
         return self._offer_candidate(self.resolve(), version=new_ver)
+
+    def _run_gate_isolated(self, gate, new_ver):
+        """Канонический gate в изолированном временном worktree от HEAD с
+        применёнными release-правками; PATH — с проектным venv
+        (test_venv_python). Возвращает (ok, tail) — tail = последние строки
+        вывода при провале (первый реальный FAIL)."""
+        import glob as _glob
+        wt = tempfile.mkdtemp(prefix="release-gate-")
+        try:
+            r = subprocess.run(["git", "-C", self.repo, "worktree", "add",
+                                "--detach", wt, "HEAD"],
+                               capture_output=True, text=True, timeout=120)
+            if r.returncode != 0:
+                return False, "worktree add: " + (r.stderr or "").strip()[:200]
+            for rel in (self.cfg.get("version_files") or ["VERSION"]) + \
+                    [self.cfg.get("notes_file", "NOTES.py")]:
+                src = os.path.join(self.repo, rel)
+                dst = os.path.join(wt, rel)
+                os.makedirs(os.path.dirname(dst) or wt, exist_ok=True)
+                shutil.copyfile(src, dst)
+            env = dict(os.environ)
+            venv = (self.prof.get("test_venv_python") or "").replace(
+                "~", os.path.expanduser("~"))
+            if venv:
+                env["PATH"] = os.path.join(venv, "bin") + os.pathsep + env.get("PATH", "")
+            try:
+                proc = subprocess.run(["bash", "-c", gate], cwd=wt, env=env,
+                                      capture_output=True, text=True,
+                                      timeout=3600)
+            except subprocess.TimeoutExpired:
+                return False, "gate timeout"
+            if proc.returncode == 0:
+                return True, ""
+            out = (proc.stdout or "") + (proc.stderr or "")
+            lines = [l for l in out.splitlines() if l.strip()]
+            tail = "\n".join(lines[-8:])
+            first_fail = next((l for l in lines
+                               if ("FAIL" in l or "ERROR" in l
+                                   or "Error" in l or "assert" in l.lower())), "")
+            return False, (first_fail + "\n---\n" + tail).strip()[:800]
+        finally:
+            subprocess.run(["git", "-C", self.repo, "worktree", "remove",
+                            "--force", wt], capture_output=True, timeout=120)
+            shutil.rmtree(wt, ignore_errors=True)
 
     def _draft_notes(self, ver, notes_ru, notes_en, task_id):
         if notes_ru and notes_en:

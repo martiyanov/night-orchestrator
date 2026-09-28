@@ -1920,6 +1920,28 @@ grep -q "INTENT=question" "$MOCKROOT/p20i.txt" && grep -q "run20-1-01" "$MOCKROO
   && ok "20i несколько кандидатов → уточнение" || bad "20i ambiguous"
 rm -rf "$OWN20"/20260901-run20-*-01
 
+# 20m (TP1-RELEASE-GATE-FAILURE): gate обязан идти в изолированном worktree
+# (НЕ в основном чекауте с bind-mounted data/) и с проектным venv в PATH.
+# gate_command проходит только вне основного репо и оставляет маркер в cwd.
+GATE20='test "$(pwd)" != "__REPO20__" && touch GATE_RAN_IN_CWD'
+GATE20="${GATE20//__REPO20__/$DD20}"
+jq --arg g "$GATE20" '.["deploy-demo"].release.gate_command=$g' \
+  "$ORCH_TEST_HOME/config/projects.json" > "$ORCH_TEST_HOME/config/projects.json.t" \
+  && mv "$ORCH_TEST_HOME/config/projects.json.t" "$ORCH_TEST_HOME/config/projects.json"
+mk20commit code-m >/dev/null; sleep 1
+HEAD20M="$(git -C "$DD20" rev-parse HEAD)"  # принять новый коммит → D
+OA20 create --project deploy-demo --action owner_accept_demo --sha "$HEAD20M" >/dev/null
+OA20 consume --project deploy-demo --action owner_accept_demo --sha "$HEAD20M" --result ok >/dev/null
+RF20 prepare --task-id SELF-20 > "$MOCKROOT/rel20m.txt" 2>&1
+grep -q "Выпуск 1.4.0 подготовлен\|Выпуск 1.5.0 подготовлен" "$MOCKROOT/rel20m.txt" \
+  && [ ! -e "$DD20/GATE_RAN_IN_CWD" ] \
+  && ok "20m gate исполнен в изолированном worktree (маркер не в основном репо)" \
+  || bad "20m gate в основном чекауте/не исполнен: $(head -2 "$MOCKROOT/rel20m.txt" | tr '\n' ' ')"
+# вернуть штатный gate фикстуры
+jq '.["deploy-demo"].release.gate_command="true"' \
+  "$ORCH_TEST_HOME/config/projects.json" > "$ORCH_TEST_HOME/config/projects.json.t" \
+  && mv "$ORCH_TEST_HOME/config/projects.json.t" "$ORCH_TEST_HOME/config/projects.json"
+
 # 20k (TEST 8): guard не менялся — прямые release/deploy команды executor'у FATAL
 for c in "cat ops/deploy-prod.sh" "bash ops/deploy-prod.sh" "git push origin master"; do
   run_guarded writable "$WT" 10 "$c" "$MOCKROOT/20k.log" 2>/dev/null; r20k=$?

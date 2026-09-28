@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.6
+
+- **TP1-RELEASE-GATE-FAILURE**: prepare запускал канонический gate в
+  ОСНОВНОМ чекауте с унаследованным PATH (системный pytest) — для AgonArena
+  это нарушает канонический процесс (изолированный worktree + проектный
+  venv) и падает на root-owned bind-mounted data/ («unable to open
+  database file» при создании data/agonarena_test_*.db). Fix: gate в
+  изолированном временном git-worktree от HEAD с применёнными
+  release-правками и PATH из test_venv_python; при провале в аудите и
+  ответе — первый реальный FAIL (first_fail + tail), файлы основного
+  чекаута восстанавливаются как раньше. Тест 20m: gate обязан исполняться
+  вне основного репо (маркер GATE_RAN_IN_CWD не появляется в чекауте).
+
 ## 0.3.5
 
 - CI: надёжные аннотации падений selftest (ранняя обёртка с set -e/pipefail
