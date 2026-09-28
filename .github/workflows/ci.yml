@@ -37,53 +37,27 @@ jobs:
         run: ./scripts/secret-scan.sh
       - name: selftest (default)
         run: |
-          set -o pipefail
-          ./bin/selftest.sh 2>&1 | tee /tmp/selftest-default.log || code=$?
-          grep "FAIL:" /tmp/selftest-default.log | while IFS= read -r line; do
-            echo "::error::DEF: ${line:0:250}"
-          done
-          if [ "${code:-0}" != "0" ] && ! grep -q "FAIL:" /tmp/selftest-default.log; then
-            tail -n 40 /tmp/selftest-default.log | while IFS= read -r line; do
-              echo "::error::DEF-TAIL: ${line:0:250}"
+          code=0
+          ./bin/selftest.sh > /tmp/std.log 2>&1 || code=$?
+          if [ "$code" -ne 0 ]; then
+            tail -n 60 /tmp/std.log | while IFS= read -r l; do
+              echo "::error::DEF: ${l:0:250}"
             done
           fi
-          exit ${code:-0}
+          exit $code
+
       - name: selftest (full)
         run: |
-          set -o pipefail
-          ./bin/selftest.sh --full 2>&1 | tee /tmp/selftest-full.log || code=$?
-          grep "FAIL:" /tmp/selftest-full.log | while IFS= read -r line; do
-            echo "::error::${line:0:250}"
-          done
-          if [ "${code:-0}" != "0" ] && ! grep -q "FAIL:" /tmp/selftest-full.log; then
-            tail -n 40 /tmp/selftest-full.log | while IFS= read -r line; do
-              echo "::error::TAIL: ${line:0:250}"
+          code=0
+          ./bin/selftest.sh --full > /tmp/stf.log 2>&1 || code=$?
+          if [ "$code" -ne 0 ]; then
+            grep "FAIL:" /tmp/stf.log | while IFS= read -r l; do
+              echo "::error::FULL: ${l:0:250}"
             done
+            if ! grep -q "FAIL:" /tmp/stf.log; then
+              tail -n 60 /tmp/stf.log | while IFS= read -r l; do
+                echo "::error::FULL-TAIL: ${l:0:250}"
+              done
+            fi
           fi
-          exit ${code:-0}
-
-  release:
-    name: Create GitHub Release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: checks
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    concurrency:
-      group: release-${{ github.ref }}
-    steps:
-      - name: Create release unless it already exists
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release $TAG already exists; leaving it unchanged."
-            exit 0
-          fi
-
-          gh release create "$TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --verify-tag \
-            --title "$TAG" \
-            --generate-notes
+          exit $code
