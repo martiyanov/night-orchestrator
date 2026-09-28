@@ -1,12 +1,18 @@
 # Changelog
 
+## 0.3.7
+
+- Secret-scan: CHANGELOG 0.3.6 упоминал приватное имя проекта (маркер
+  сканера) — формулировка обезличена; каноническая зелёная точка серии
+  (v0.3.6 красил только secret-scan, тесты/код те же).
+
 ## 0.3.6
 
 - **TP1-RELEASE-GATE-FAILURE**: prepare запускал канонический gate в
-  ОСНОВНОМ чекауте с унаследованным PATH (системный pytest) — для AgonArena
-  это нарушает канонический процесс (изолированный worktree + проектный
-  venv) и падает на root-owned bind-mounted data/ («unable to open
-  database file» при создании data/agonarena_test_*.db). Fix: gate в
+  ОСНОВНОМ чекауте с унаследованным PATH (системный pytest) — для проекта
+  с bind-mounted root-owned data/ это нарушает канонический процесс
+  (изолированный worktree + проектный venv) и падает на создании
+  тестовых БД в data/ («unable to open database file»). Fix: gate в
   изолированном временном git-worktree от HEAD с применёнными
   release-правками и PATH из test_venv_python; при провале в аудите и
   ответе — первый реальный FAIL (first_fail + tail), файлы основного
