@@ -1883,14 +1883,15 @@ grep -q "Изменения приняты" "$MOCKROOT/rel20l.txt" && grep -q "�
 S20B="$(mk20commit code-b)"
 OA20 create --project deploy-demo --action owner_accept_demo --sha "$S20B" >/dev/null
 OA20 consume --project deploy-demo --action owner_accept_demo --sha "$S20B" --result "accepted" >/dev/null
-bash -c "$(PH20 "готовь релиз" | sed -n '/===EXECUTE===/{n;p}')" > "$MOCKROOT/rel20g.txt" 2>&1
-RC2_7="$(RF20 state --json | jq -r '.release_candidate_sha' | head -c 7)"
-[[ -n "$RC2_7" && "$RC2_7" != "$RC7_20" ]] || bad "20g второй RC не создался"
+RF20 prepare > "$MOCKROOT/rel20g.txt" 2>&1
+RC2_7="$(RF20 state --json | jq -r '.release_candidate_sha // ""' | head -c 7)"
+[[ -n "$RC2_7" && "$RC2_7" != "$RC7_20" ]] || bad "20g второй RC не создался ($RC2_7 vs $RC7_20)"
 RF20 handle --sha "orch1:release-deploy:$RC7_20" > "$MOCKROOT/rel20g2.txt" 2>&1
 grep -q "устарело" "$MOCKROOT/rel20g2.txt" \
   && ok "20g старое production-разрешение (RC1) → stale" || bad "20g stale RC"
 
 # 20h (TEST 3): app-код ПОСЛЕ принятого → prepare отказ
+sleep 1  # детерминированный executed_at (не в одну секунду с 20g)
 S20C="$(mk20commit code-c)"
 OA20 create --project deploy-demo --action owner_accept_demo --sha "$S20C" >/dev/null
 OA20 consume --project deploy-demo --action owner_accept_demo --sha "$S20C" --result "accepted" >/dev/null

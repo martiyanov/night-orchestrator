@@ -114,7 +114,7 @@ def _role_action(prof, role):
 def _last_executed_sha(auths, action):
     xs = sorted((a for a in auths if a.get("action") == action
                  and a.get("status") == "executed"),
-                key=lambda a: a.get("executed_at") or "")
+                key=lambda a: (a.get("executed_at") or "", a.get("id") or ""))
     return xs[-1]["sha"] if xs else None
 
 
@@ -165,11 +165,12 @@ class Flow:
         rel_accepted = any(a.get("action") == "release_accept"
                            and a.get("status") == "executed"
                            and a.get("sha") == rc for a in self.auths) if rc_valid else False
-        # H: всё ПРИНЯТОЕ уже содержится в проде (новый принятый код → D/E/F)
+        # H: всё принятое выпущено И main == проду; если main ушёл вперёд —
+        # это новый непринятый код (staging-этап main-потока) → B
         all_released = bool(self.accepted_code_sha and self.production_sha
                             and self._descendant(self.accepted_code_sha,
                                                  self.production_sha))
-        if all_released:
+        if all_released and self.main_sha == self.production_sha:
             state, name = "H", "PRODUCTION_DONE"
         elif rel_accepted and self.main_sha == rc:
             state, name = "G", "PRODUCTION_READY"
@@ -177,12 +178,14 @@ class Flow:
             state, name = "F", "RELEASE_ACCEPTED"
         elif rc_valid:
             state, name = "E", "RELEASE_CANDIDATE_READY"
-        elif self.accepted_code_sha:
+        elif self.accepted_code_sha and not all_released:
             state, name = "D", "RELEASE_NEEDED"
+        elif all_released:
+            state, name = "B", "STAGING_READY"  # main-поток: ждёт приёмки кода
         else:
             state, name = "A", "DEVELOPMENT"
-        allowed = {"D": ["prepare"], "E": ["accept_release"], "F": ["deploy"],
-                   "G": ["deploy"], "H": []}.get(state, [])
+        allowed = {"B": ["accept"], "D": ["prepare"], "E": ["accept_release"],
+                   "F": ["deploy"], "G": ["deploy"], "H": []}.get(state, [])
         if state == "F":
             allowed = ["deploy_after_sync"]  # main ушёл вперёд RC
         return {

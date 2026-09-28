@@ -178,7 +178,7 @@ def handle(text, project):
                 "(точный коммит %s)." % (rid, sha[:7]),
                 execute="bash %s/bin/owner_action.sh handle orch1:pass:%s"
                         % (ORCH_ROOT, rid))
-        if state == "H" and rel.get("main_sha") and rel.get("production_sha") \
+        if state in ("H", "B") and rel.get("main_sha") and rel.get("production_sha") \
                 and rel["main_sha"] != rel["production_sha"]:
             # main-поток: код в основной ветке, проверен на staging, но приёмка
             # формально не зафиксирована — детерминированная фиксация
@@ -201,10 +201,11 @@ def handle(text, project):
 
     if intent == "prepare":
         awaiting = _awaiting_runs(project)
-        if awaiting:
+        if awaiting or state == "B":
             return _emit("question",
-                         "Сначала приёмка: есть прогон(ы), ждущие вашего "
-                         "решения по коду. Подготовка выпуска — после неё.")
+                         "Сначала приёмка: код проверен на staging, но приёмка "
+                         "ещё не зафиксирована («принимаю изменения»). "
+                         "Подготовка выпуска — после неё.")
         if state == "D":
             return _emit(
                 "prepare",
