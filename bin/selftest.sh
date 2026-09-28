@@ -1776,6 +1776,10 @@ OWN20="$MOCKROOT/own20"; rm -rf "$OWN20"; mkdir -p "$OWN20"
 AUTH20="$SELFTEST_ROOT/auth20"; rm -rf "$AUTH20"; mkdir -p "$AUTH20"
 export ORCH_AUTH_DIR="$AUTH20" ORCH_RUNS_DIR="$OWN20"
 DD20="$SELFTEST_ROOT/deploydemo"
+# identity в фикстуре: release_flow делает release-коммит без -c (наследует
+# конфиг репо); на CI-раннере нет global user -> коммит бы падал
+git -C "$DD20" config user.email t@t
+git -C "$DD20" config user.name t
 # release-фикстуры репо: VERSION + NOTES.py (якорь) + app-файл-маркер
 printf '1.2.3\n' > "$DD20/VERSION"
 printf 'RELEASE_NOTES = {\n    "1.2.3": {"ru": ("base",), "en": ("base",)},\n}\n' > "$DD20/NOTES.py"

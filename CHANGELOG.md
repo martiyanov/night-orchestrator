@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.4
+
+- Тест-фикстура 20: git identity в репо фикстуры — release-коммит из
+  release_flow наследует конфиг репо; на CI-раннере нет global
+  user.name/email, из-за чего commit падал и красил v0.3.0–v0.3.3
+  (локально global user есть — маскировало). CI теперь аннотирует
+  FAIL-строки selftest в check-run (диагностика).
+
 ## 0.3.3
 
 - Тест-стабильность: sleep 1 перед accept в 20g (односекундные executed_at
