@@ -174,9 +174,11 @@ for name, spec in actions.items():
         if not found:
             out = {"auth_error": ("owner authorization required: action=%s sha=%s project=%s "
                                   "(нет активной authorization владельца — запросите владельца)"
-                                  % (name, sha_val or "?", project or "?"))}
+                                  % (name, sha_val or "?", project or "?")),
+                   "action": name, "sha": sha_val or ""}
         else:
             out["auth_id"] = found.get("id")
+            out["auth_sha"] = sha_val
     print(json.dumps(out, ensure_ascii=False))
     break
 PYPA
@@ -200,7 +202,7 @@ guard_check() {
   _deny() { GUARD_LAST_DENY="$1"; echo "guard: DENY pattern [$1] matched" >&2; return 1; }
   # таксономия DENY (SAFE-RETRY-1): fatal по умолчанию; form-правила помечают
   # recoverable, run_guarded дополнительно доказывает security-чистоту частей
-  GUARD_DENY_KIND="fatal"; GUARD_LAST_DENY=""
+  GUARD_DENY_KIND="fatal"; GUARD_LAST_DENY=""; GUARD_ACTION_ATTEMPT=""; GUARD_ACTION_SHA=""
 
   # --- project actions (проектно-ограниченные точные разрешения) ------------
   # Реестр проекта может описать действия (напр. штатный staging deploy):
@@ -209,6 +211,7 @@ guard_check() {
   # env_fixed добавит run_guarded при исполнении (секреты/пути не проходят
   # через команду модели). Без ORCH_PROJECT_ACTIONS поведение идентично прежнему.
   GUARD_MATCHED_ACTION=""; GUARD_ACTION_ENV=""; GUARD_ACTION_AUTH=""
+  GUARD_ACTION_ATTEMPT=""; GUARD_ACTION_SHA=""
   if [[ -n "${ORCH_PROJECT_ACTIONS:-}" && "$mode" == "writable" ]]; then
     local _pa
     _pa="$(_project_action_match "$cmd_stripped" "$jail" "$ORCH_PROJECT_ACTIONS")"
@@ -216,14 +219,21 @@ guard_check() {
       local _paerr; _paerr="$(printf '%s' "$_pa" | jq -r '.auth_error // empty')"
       if [[ -n "$_paerr" ]]; then
         # форма действия совпала, но authorization владельца отсутствует/израсходована:
-        # SECURITY FATAL (owner-действие без разрешения владельца)
+        # SECURITY FATAL (owner-действие без разрешения владельца). Попытку фиксируем
+        # (action:sha) — run_task превращает ТОЛЬКО same-run повтор успешного
+        # исполнения в no-op ALREADY_EXECUTED; всё прочее остаётся FATAL.
         GUARD_DENY_KIND="fatal"
+        local _pa_a _pa_s
+        _pa_a="$(printf '%s' "$_pa" | jq -r '.action // empty')"
+        _pa_s="$(printf '%s' "$_pa" | jq -r '.sha // empty')"
+        [[ -n "$_pa_a" ]] && GUARD_ACTION_ATTEMPT="${_pa_a}:${_pa_s}"
         _deny "$_paerr"
         return 1
       fi
       GUARD_MATCHED_ACTION="$(printf '%s' "$_pa" | jq -r '.name // empty')"
       GUARD_ACTION_ENV="$(printf '%s' "$_pa" | jq -c '.env_fixed // {}')"
       GUARD_ACTION_AUTH="$(printf '%s' "$_pa" | jq -r '.auth_id // empty')"
+      GUARD_ACTION_SHA="$(printf '%s' "$_pa" | jq -r '.auth_sha // empty')"
       echo "guard: ALLOW project action [$GUARD_MATCHED_ACTION] (exact match, jail-confined)" >&2
       return 0
     fi

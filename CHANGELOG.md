@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.1.7
+
+- **Same-run ALREADY_EXECUTED** (OWNER-ACTION-IDEMPOTENCY-1): повтор
+  успешно исполненного owner-authorized action (совпадают run, project,
+  action, SHA; успех доказан structured run-state — PROJECT_ACTION_EXECUTED
+  факты, не текст модели) — NO-OP: действие не исполняется повторно,
+  authorization не восстанавливается, audit-событие
+  PROJECT_ACTION_ALREADY_EXECUTED, модели возвращается системная заметка
+  «используй существующий результат и выдай RESULT». Run финализируется
+  штатно; владелец красного сообщения не получает. Мотивация: реальный
+  production_go выполнился успешно, модель повторила команду в том же run —
+  guard корректно увидел consumed authorization, но run завершался красным
+  PERMISSION_VIOLATION уже после успешного деплоя.
+- Границы: другой run / другой SHA / другое действие / неудавшаяся попытка /
+  consumed в старом run / недоказуемый успех — прежняя security-семантика
+  (FATAL). Guard-правила не изменены.
+- Самопроверка: секция 17 (8 проверок) — exec→repeat no-op (side-effect=1,
+  зелёный RESULT, отчёт без красного), другой SHA FATAL, другой run FATAL,
+  другое действие FATAL, FAIL→EXEC→no-op (fail не засчитывается),
+  security-фатальные команды FATAL. Итог: default 212/0, full 384/0.
+
 ## 0.1.6
 
 - **Owner-authorized actions** (OWNER-ACTIONS-1): действия проектного

@@ -1197,6 +1197,7 @@ DD16="$SELFTEST_ROOT/deploydemo"; DDW16="$SELFTEST_ROOT/worktrees/dd-16"
 cat > "$DD16/ops/owner-demo.sh" <<'EODEMO'
 #!/usr/bin/env bash
 # демо owner-action: идемпотентная state-машина (already-applied)
+if [ -f fail.once ]; then rm -f fail.once; echo "OWNER-DEMO FAIL (once)"; exit 1; fi
 if [ -f owner-demo.state ] && grep -q "APPLIED" owner-demo.state; then
   echo "ALREADY APPLIED (mode=${DEMO_MODE:-?})"
   exit 0
@@ -1286,6 +1287,78 @@ grep -q "ALREADY APPLIED (mode=production)" "$MOCKROOT/16go2.log" 2>/dev/null &&
   && ok "16GO2 production_go (отдельная auth) → исполнено" || bad "16GO2 rc=$r"
 
 git -C "$DD16" worktree remove --force "$DDW16" >/dev/null 2>&1 || rm -rf "$DDW16"
+unset ORCH_AUTH_DIR ORCH_PROJECT ORCH_PROJECT_ACTIONS
+
+# --- 17: same-run ALREADY_EXECUTED (OWNER-ACTION-IDEMPOTENCY-1) -------------
+# Источник истины: structured run-state успешных исполнений
+# (PROJECT_ACTION_EXECUTED) — не текст модели. Повтор action+sha в ТОМ ЖЕ run —
+# no-op: не исполняется, не нарушает security; audit ALREADY_EXECUTED.
+DD17="$SELFTEST_ROOT/deploydemo"; DDW17="$SELFTEST_ROOT/worktrees/dd-17"
+git -C "$DD17" worktree add -q "$DDW17" -b dd-17 2>/dev/null || git -C "$DD17" worktree add "$DDW17" -b dd-17 >/dev/null 2>&1 || true
+PA17="$(jq -c '.["deploy-demo"].project_actions' "$ORCH_TEST_HOME/config/projects.json")"
+AUTH17="$SELFTEST_ROOT/auth17"; rm -rf "$AUTH17"; mkdir -p "$AUTH17"
+OA17="python3 $REPO_ROOT/bin/owner_auth.py"
+G17="1111111111111111111111111111111111111111"
+W17="2222222222222222222222222222222222222222"
+ACC17="AG_ACCEPT_SHA=$G17 bash ops/owner-demo.sh"
+export ORCH_AUTH_DIR="$AUTH17" ORCH_PROJECT="deploy-demo" ORCH_PROJECT_ACTIONS="$PA17" GUARD_DENY_ROOTS="/srv/example-prod"
+mk17task() { jq -n --argjson checks '[]' --argjson og '[]' \
+  '{project:"deploy-demo", task_id:"SELF-17", goal:"owner action", risk:"LOW", mode:"writable",
+    allowed_paths:["owner-demo.state"], forbidden_paths:[".env"], bootstrap:[],
+    checks:$checks, owner_gates:$og, cleanup_worktree:true}' ; }
+
+# 17A: exec → повтор того же action+sha в том же run → ALREADY_EXECUTED, side-effect 1, зелёный RESULT
+$OA17 create --project deploy-demo --action owner_accept_demo --sha "$G17" >/dev/null
+mk17task > "$MOCKROOT/t_17a.json"
+: > "$MOCKROOT/f_17a.jsonl"
+fixture_shell "$MOCKROOT/f_17a.jsonl" "$ACC17"
+fixture_shell "$MOCKROOT/f_17a.jsonl" "$ACC17"
+fixture_result "$MOCKROOT/f_17a.jsonl" '{"action":"result","result":{"task_id":"SELF-17","status":"PASS","summary":"applied once","files_changed":["owner-demo.state"],"checks":[],"decisions":[],"assumptions":[],"unresolved":[],"next":"none"}}'
+st="$(run_case "case_17a" "$MOCKROOT/t_17a.json" "$MOCKROOT/f_17a.jsonl")"
+exe17="$(grep -c '"event":"PROJECT_ACTION_EXECUTED"' "$MOCKROOT/case_17a/log.jsonl" 2>/dev/null || true)"; exe17=${exe17:-0}
+alr17="$(grep -c '"event":"PROJECT_ACTION_ALREADY_EXECUTED"' "$MOCKROOT/case_17a/log.jsonl" 2>/dev/null || true)"; alr17=${alr17:-0}
+se17="$(grep -c 'OWNER-DEMO APPLIED' "$MOCKROOT/case_17a/SELF-17/history.txt" 2>/dev/null || true)"; se17=${se17:-0}
+viol17="$(grep -c '"event":"PERMISSION_VIOLATION"' "$MOCKROOT/case_17a/log.jsonl" 2>/dev/null || true)"; viol17=${viol17:-0}
+[[ "$st" == "READY_FOR_OWNER_PASS" && "$exe17" == "1" && "$alr17" -ge 1 && "$se17" == "1" && "$viol17" == "0" ]] \
+  && ok "17A повтор в том же run: EXECUTED=1, ALREADY>=1, side-effect=1, violations=0 ($st)" \
+  || bad "17A st=$st exe=$exe17 already=$alr17 side=$se17 viol=$viol17"
+# UX: отчёт без красного, действие отражено один раз
+grep -q "✗ было запрещённое действие" "$MOCKROOT/case_17a/report.txt" 2>/dev/null \
+  && bad "17A отчёт красный при no-op повторе" || ok "17A отчёт владельцу без красного"
+
+# 17B: тот же action, ДРУГОЙ sha — не no-op (DENY; auth для G17 уже consumed)
+run_guarded writable "$DDW17" 10 "AG_ACCEPT_SHA=$W17 bash ops/owner-demo.sh" "$MOCKROOT/17b.log" 2>/dev/null
+[[ $? -eq 125 ]] && ok "17B другой SHA → FATAL 125" || bad "17B другой SHA прошёл!"
+# 17C: тот же action+sha из ДРУГОГО run (state пуст, auth consumed) → FATAL
+run_guarded writable "$DDW17" 10 "$ACC17" "$MOCKROOT/17c.log" 2>/dev/null
+[[ $? -eq 125 ]] && ok "17C другой run (auth consumed) → FATAL 125" || bad "17C повтор из другого run прошёл!"
+# 17D: другое действие без authorization → FATAL
+run_guarded writable "$DDW17" 10 "DEPLOY_SHA=$G17 bash ops/owner-demo.sh" "$MOCKROOT/17d.log" 2>/dev/null
+[[ $? -eq 125 ]] && ok "17D другое action без auth → FATAL 125" || bad "17D другое action прошёл!"
+
+# 17E: первая попытка FAILED → повтор НЕ already-executed: вторая исполняется, третья — уже no-op
+rm -rf "$AUTH17"; mkdir -p "$AUTH17"
+$OA17 create --project deploy-demo --action owner_accept_demo --sha "$G17" >/dev/null
+touch "$DDW17/fail.once"
+mk17task > "$MOCKROOT/t_17e.json"
+: > "$MOCKROOT/f_17e.jsonl"
+fixture_shell "$MOCKROOT/f_17e.jsonl" "$ACC17"
+fixture_shell "$MOCKROOT/f_17e.jsonl" "$ACC17"
+fixture_shell "$MOCKROOT/f_17e.jsonl" "$ACC17"
+fixture_result "$MOCKROOT/f_17e.jsonl" '{"action":"result","result":{"task_id":"SELF-17","status":"PASS","summary":"applied on 2nd","files_changed":["owner-demo.state"],"checks":[],"decisions":[],"assumptions":[],"unresolved":[],"next":"none"}}'
+st="$(run_case "case_17e" "$MOCKROOT/t_17e.json" "$MOCKROOT/f_17e.jsonl")"
+exe17e="$(grep -c '"event":"PROJECT_ACTION_EXECUTED"' "$MOCKROOT/case_17e/log.jsonl" 2>/dev/null || true)"; exe17e=${exe17e:-0}
+alr17e="$(grep -c '"event":"PROJECT_ACTION_ALREADY_EXECUTED"' "$MOCKROOT/case_17e/log.jsonl" 2>/dev/null || true)"; alr17e=${alr17e:-0}
+[[ "$st" == "READY_FOR_OWNER_PASS" && "$exe17e" == "1" && "$alr17e" -ge 1 ]] \
+  && ok "17E FAIL→EXEC→no-op: executed=1 (fail не засчитан), already>=1" \
+  || bad "17E st=$st exe=$exe17e already=$alr17e"
+
+# 17F: security-фатальные команды без project_action — FATAL как раньше
+for c in "git push origin main" "cat /srv/example-prod/secrets/x"; do
+  run_guarded writable "$DDW17" 10 "$c" "$MOCKROOT/17f.log" 2>/dev/null; r=$?
+  [[ $r -eq 125 ]] && ok "17F FATAL: $c" || bad "17F rc=$r: $c"
+done
+git -C "$DD17" worktree remove --force "$DDW17" >/dev/null 2>&1 || rm -rf "$DDW17"
 unset ORCH_AUTH_DIR ORCH_PROJECT ORCH_PROJECT_ACTIONS
 
 # --- 10: human-readable owner report (представление; машинный RESULT не меняется) ---

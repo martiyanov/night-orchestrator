@@ -490,9 +490,10 @@ agent_attempt() { # $1 = phase label
         # owner-authorized action успешно исполнен -> consume authorization
         # (неисполненная/упавшая остаётся authorized: повтор возможен)
         if [[ $grc -eq 0 && -n "${GUARD_ACTION_AUTH:-}" ]]; then
-          emit PROJECT_ACTION_EXECUTED "$(jq -cn --arg t "$TASK_ID" --arg a "$GUARD_MATCHED_ACTION" --arg ai "$GUARD_ACTION_AUTH" '{task_id:$t,action:$a,auth_id:$ai}')"
+          emit PROJECT_ACTION_EXECUTED "$(jq -cn --arg t "$TASK_ID" --arg a "$GUARD_MATCHED_ACTION" --arg ai "$GUARD_ACTION_AUTH" --arg s "${GUARD_ACTION_SHA:-}" '{task_id:$t,action:$a,auth_id:$ai,sha:$s}')"
           python3 "$ORCH_ROOT/bin/owner_auth.py" consume --id "$GUARD_ACTION_AUTH" \
             --result "executed rc=0 task=$TASK_ID" >> "$TASK_DIR/gate_evidence.txt" 2>&1 || true
+          [[ -n "${GUARD_ACTION_SHA:-}" ]] && RUN_EXECUTED_ACTIONS="$RUN_EXECUTED_ACTIONS $GUARD_MATCHED_ACTION:$GUARD_ACTION_SHA"
         fi
         if [[ $grc -eq 126 ]]; then
           # recoverable shape-deny: исходная команда НЕ исполнена; модель
@@ -513,6 +514,16 @@ agent_attempt() { # $1 = phase label
           continue
         fi
         if [[ $grc -eq 125 ]]; then
+          # same-run повтор успешно исполненного owner-действия (action+sha совпали,
+          # факт исполнения доказан structured run-state) — NO-OP: не исполнять,
+          # не нарушение; security-семантика для всех остальных случаев неизменна
+          if [[ -n "${GUARD_ACTION_ATTEMPT:-}" && "${GUARD_ACTION_ATTEMPT}" != ":" ]] \
+             && [[ " ${RUN_EXECUTED_ACTIONS:-} " == *" ${GUARD_ACTION_ATTEMPT} "* ]]; then
+            emit PROJECT_ACTION_ALREADY_EXECUTED "$(jq -cn --arg t "$TASK_ID" --arg a "${GUARD_ACTION_ATTEMPT%%:*}" --arg s "${GUARD_ACTION_ATTEMPT#*:}" '{task_id:$t,action:$a,sha:$s}')"
+            { echo ">>> SYSTEM NOTE: действие ${GUARD_ACTION_ATTEMPT%%:*} (sha ${GUARD_ACTION_ATTEMPT#*:}) уже успешно выполнено в текущем run.";
+              echo "НЕ повторяйте его. Используйте существующий результат выше и сформируйте итоговый RESULT."; echo; } >> "$TASK_DIR/history.txt"
+            continue
+          fi
           { echo "PERMISSION_VIOLATION: guard denied command (FATAL, no retry):"; echo "$cmd"; } > "$TASK_DIR/failure_evidence.txt"
           emit PERMISSION_VIOLATION "$(jq -cn --arg t "$TASK_ID" --arg c "$(printf '%s' "$cmd" | head -c 120)" '{task_id:$t,cmd_head:$c}')"
           return 125
@@ -679,6 +690,9 @@ run_review() { # $1=extra evidence file or "" -> review.json ; 0 approve / 1 rej
 phase_label="INITIAL"
 emit TASK_STARTED "$(jq -cn --arg t "$TASK_ID" --arg m "$MODE" --arg r "$RISK" --arg j "$JAIL" --arg pr "$PROFILE" --arg ex "$EXEC_MODEL" '{task_id:$t,mode:$m,risk:$r,jail:$j,profile:$pr,executor:$ex}')"
 attempt_no=0; turns_no=0; MEANINGFUL_WRITES=0; RETRY_COUNT=0
+# structured run-state: "action:sha" успешно исполненных owner-действий этого run
+# (источник истины для ALREADY_EXECUTED; не текст модели — только факты исполнения)
+RUN_EXECUTED_ACTIONS=""
 final_status=""; violation=0; gates_ok=0
 strong_review_done=0; invalid_repair_done=0
 HANDOFF_FILE=""

@@ -34,7 +34,11 @@
    по умолчанию 2), владелец красного сообщения не получает. Составные
    команды, целиком проходящие guard, разрешены как раньше (проверенные
    продовые паттерны `sed | head`, `cd X && cat`, `git add && git commit`).
-5b. **Owner-authorized actions** (0.1.6): merge/push/release выполняются
+5b. **Owner-authorized actions** (0.1.6): повтор успешно исполненного
+   owner-действия (action+sha) в ТОМ ЖЕ run — no-op ALREADY_EXECUTED
+   (0.1.7): не исполняется повторно, не нарушение, владелец красного не
+   получает; источник истины — structured run-state фактов исполнения.
+   Другой run/sha/action или неудавшаяся попытка — прежняя security-семантика. merge/push/release выполняются
    только как project_actions с полем owner_auth — при активной
    одноразовой authorization владельца (project+action+SHA), отдельной
    для production (production_go требует executed owner_accept того же
