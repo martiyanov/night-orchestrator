@@ -44,6 +44,11 @@ jobs:
           grep "FAIL:" /tmp/selftest-full.log | while IFS= read -r line; do
             echo "::error::${line:0:250}"
           done
+          if [ "${code:-0}" != "0" ] && ! grep -q "FAIL:" /tmp/selftest-full.log; then
+            tail -n 40 /tmp/selftest-full.log | while IFS= read -r line; do
+              echo "::error::TAIL: ${line:0:250}"
+            done
+          fi
           exit ${code:-0}
 
   release:
