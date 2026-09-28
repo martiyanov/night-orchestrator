@@ -41,6 +41,17 @@
   через команду модели;
 - разрешённое действие фиксируется в audit trail (`PROJECT_ACTION_ALLOWED`).
 
+### owner-authorized actions (0.1.6)
+Действие с полем `"owner_auth": {"sha_env": "AG_ACCEPT_SHA"}` исполняется
+ТОЛЬКО при активной authorization владельца: `bin/owner_auth.py create/check/consume`
+(состояние — `authorizations/AUTH-*.json`). Authorization привязана к
+project+action+SHA(40hex), одноразовая (consume после успешного исполнения),
+идемпотентный create; `--requires-prior-action` связывает цепочки
+(production_go требует executed owner_accept того же SHA — OWNER PASS не
+даёт production автоматически). Без authorization точная форма действия —
+FATAL DENY с точной причиной. Audit: PROJECT_ACTION_ALLOWED /
+PROJECT_ACTION_EXECUTED (+consume) в log.jsonl прогона.
+
 Production deploy остаётся запрещённым универсальными правилами guard
 (паттерны deploy, guard_roots) для ВСЕХ проектов; `project_actions` —
 точечное разрешение, а не ослабление общих запретов.

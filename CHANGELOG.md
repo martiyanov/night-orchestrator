@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.1.6
+
+- **Owner-authorized actions** (OWNER-ACTIONS-1): действия проектного
+  реестра с полем `owner_auth` исполняются только при активной
+  authorization владельца. Машинное состояние — `bin/owner_auth.py`
+  (create/check/consume/list; `authorizations/AUTH-*.json`): привязка к
+  project+action+SHA(40hex), одноразовость (consume после успешного
+  исполнения), идемпотентный create, `--requires-prior-action` для цепочек
+  (production_go требует executed owner_accept того же SHA; OWNER PASS не
+  даёт production автоматически). Без authorization точная форма действия —
+  FATAL DENY с точной причиной; после успеха — consume и audit
+  (PROJECT_ACTION_ALLOWED/PROJECT_ACTION_EXECUTED).
+- Read-форма `git worktree list [--porcelain]` разрешена (инертная замена
+  в матче); write-формы worktree (add/remove/prune/move/lock/unlock) —
+  по-прежнему SECURITY FATAL (jail-escape). Причина: реальный прогон
+  выпуска погиб на ложном deny `git worktree list` при read-only проверке
+  состояния.
+- Самопроверка: секция 16 (23 проверки) — worktree read/write, owner-действия
+  без/с чужой/с неверной authorization, consume+повтор, already-applied
+  идемпотентность, production_go без prior и с prior, прямые
+  merge/push/deploy-prod/guard-root — FATAL, сквозной run_task с consume.
+  Итог: default 212/0, full 376/0.
+
 ## 0.1.5
 
 - Таксономия DENY (SAFE-RETRY-1): security-причины по-прежнему FATAL

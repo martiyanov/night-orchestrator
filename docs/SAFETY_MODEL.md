@@ -34,6 +34,12 @@
    по умолчанию 2), владелец красного сообщения не получает. Составные
    команды, целиком проходящие guard, разрешены как раньше (проверенные
    продовые паттерны `sed | head`, `cd X && cat`, `git add && git commit`).
+5b. **Owner-authorized actions** (0.1.6): merge/push/release выполняются
+   только как project_actions с полем owner_auth — при активной
+   одноразовой authorization владельца (project+action+SHA), отдельной
+   для production (production_go требует executed owner_accept того же
+   SHA). Свободный executor shell для merge/push/deploy остаётся
+   запрещённым без изменений.
 6. **Границы владельца**: merge/push — только OWNER PASS; production — только
    OWNER GO. Автоматического обхода не существует. Staging deploy может
    выполняться оркестратором как проектное действие после успешных тестов

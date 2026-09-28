@@ -140,8 +140,44 @@ for name, spec in actions.items():
     if bad:
         continue
     fixed = spec.get("env_fixed", {})
-    print(json.dumps({"name": name, "env_fixed": fixed if isinstance(fixed, dict) else {}},
-                     ensure_ascii=False))
+    out = {"name": name, "env_fixed": fixed if isinstance(fixed, dict) else {}}
+    # owner-authorized action: требуется активная authorization владельца
+    # (project+action+sha, status=authorized). Без неё — deny с точной причиной
+    # (FATAL: executor не должен пытаться выполнять owner-действия самовольно).
+    oa = spec.get("owner_auth")
+    if oa:
+        sha_env = (oa.get("sha_env") if isinstance(oa, dict) else None) \
+            or (env_specs[0].get("name") if env_specs else None)
+        sha_val = None
+        for i2, es2 in enumerate(env_specs):
+            m2 = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", toks[i2])
+            if m2 and m2.group(1) == sha_env:
+                sha_val = m2.group(2)
+        auth_dir = os.environ.get("ORCH_AUTH_DIR") or os.path.join(
+            os.environ.get("ORCH_ROOT") or "/nonexistent", "authorizations")
+        project = os.environ.get("ORCH_PROJECT") or ""
+        found = None
+        if os.path.isdir(auth_dir) and sha_val:
+            for f2 in sorted(os.listdir(auth_dir)):
+                if not (f2.startswith("AUTH-") and f2.endswith(".json")):
+                    continue
+                try:
+                    a2 = json.load(open(os.path.join(auth_dir, f2)))
+                except OSError:
+                    continue
+                if (a2.get("project") == project and a2.get("action") == name
+                        and a2.get("sha") == sha_val
+                        and a2.get("status") == "authorized"
+                        and a2.get("authorized_by_owner")):
+                    found = a2
+                    break
+        if not found:
+            out = {"auth_error": ("owner authorization required: action=%s sha=%s project=%s "
+                                  "(нет активной authorization владельца — запросите владельца)"
+                                  % (name, sha_val or "?", project or "?"))}
+        else:
+            out["auth_id"] = found.get("id")
+    print(json.dumps(out, ensure_ascii=False))
     break
 PYPA
 }
@@ -155,6 +191,10 @@ guard_check() {
   #  redirects to real paths like 2>/home/.../err.log stay significant)
   local body="${lc//2>&1/}"; body="${body//1>&2/}"
   body="$(printf '%s' "$body" | sed -E 's#2?>{1,2} ?/dev/null# #g; s#&>{1,2} ?/dev/null# #g')"
+  # read-форма git worktree list — инертна для мутационного матчера (замена на
+  # разрешённый read-глагол). Write-формы (add/remove/prune/move/lock/unlock)
+  # не матчатся strip-регэкспом и остаются SECURITY FATAL (jail-escape).
+  body="$(printf '%s' "$body" | sed -E 's/git[[:space:]]+worktree[[:space:]]+list([[:space:]]+(-v|--porcelain))*([[:space:]]|$)/git status /g')"
 
   local re
   _deny() { GUARD_LAST_DENY="$1"; echo "guard: DENY pattern [$1] matched" >&2; return 1; }
@@ -168,13 +208,22 @@ guard_check() {
   # запретов deploy/bash, но сами запреты для остальных команд не меняются.
   # env_fixed добавит run_guarded при исполнении (секреты/пути не проходят
   # через команду модели). Без ORCH_PROJECT_ACTIONS поведение идентично прежнему.
-  GUARD_MATCHED_ACTION=""; GUARD_ACTION_ENV=""
+  GUARD_MATCHED_ACTION=""; GUARD_ACTION_ENV=""; GUARD_ACTION_AUTH=""
   if [[ -n "${ORCH_PROJECT_ACTIONS:-}" && "$mode" == "writable" ]]; then
     local _pa
     _pa="$(_project_action_match "$cmd_stripped" "$jail" "$ORCH_PROJECT_ACTIONS")"
     if [[ -n "$_pa" ]]; then
+      local _paerr; _paerr="$(printf '%s' "$_pa" | jq -r '.auth_error // empty')"
+      if [[ -n "$_paerr" ]]; then
+        # форма действия совпала, но authorization владельца отсутствует/израсходована:
+        # SECURITY FATAL (owner-действие без разрешения владельца)
+        GUARD_DENY_KIND="fatal"
+        _deny "$_paerr"
+        return 1
+      fi
       GUARD_MATCHED_ACTION="$(printf '%s' "$_pa" | jq -r '.name // empty')"
       GUARD_ACTION_ENV="$(printf '%s' "$_pa" | jq -c '.env_fixed // {}')"
+      GUARD_ACTION_AUTH="$(printf '%s' "$_pa" | jq -r '.auth_id // empty')"
       echo "guard: ALLOW project action [$GUARD_MATCHED_ACTION] (exact match, jail-confined)" >&2
       return 0
     fi
@@ -443,7 +492,7 @@ guard_check() {
 # executes CMD with bash -c inside JAIL under sanitized env; rc 125 => guard violation
 run_guarded() {
   local mode="$1" jail="$2" tmo="$3" cmd="$4" out="$5"
-  GUARD_MATCHED_ACTION=""; GUARD_ACTION_ENV=""
+  GUARD_MATCHED_ACTION=""; GUARD_ACTION_ENV=""; GUARD_ACTION_AUTH=""
   if ! guard_check "$mode" "$jail" "$cmd"; then
     # DENY-таксономия: form-only причина (и каждая часть security-чиста) →
     # 126 recoverable: команда НЕ исполнена, run_task даёт модели исправить

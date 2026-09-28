@@ -156,6 +156,9 @@ export GUARD_DENY_ROOTS
 # в реестре — пусто, guard работает как раньше
 ORCH_PROJECT_ACTIONS="$(echo "$REG" | jq -c '.project_actions // {}')"
 export ORCH_PROJECT_ACTIONS
+# owner-authorized actions: проект и каталог authorization-состояний для guard
+export ORCH_PROJECT="$PROJECT"
+export ORCH_AUTH_DIR="${ORCH_AUTH_DIR:-$ORCH_ROOT/authorizations}"
 WT_ROOT="$(echo "$REG" | jq -r '.worktree_root')"
 DEFAULT_BRANCH="$(echo "$REG" | jq -r '.default_branch')"
 TEST_CMD="$(echo "$REG" | jq -r '.test_command')"
@@ -483,6 +486,13 @@ agent_attempt() { # $1 = phase label
         # audit: разрешённое проектное действие (точное совпадение с реестром)
         if [[ -n "${GUARD_MATCHED_ACTION:-}" ]]; then
           emit PROJECT_ACTION_ALLOWED "$(jq -cn --arg t "$TASK_ID" --arg a "$GUARD_MATCHED_ACTION" '{task_id:$t,action:$a}')"
+        fi
+        # owner-authorized action успешно исполнен -> consume authorization
+        # (неисполненная/упавшая остаётся authorized: повтор возможен)
+        if [[ $grc -eq 0 && -n "${GUARD_ACTION_AUTH:-}" ]]; then
+          emit PROJECT_ACTION_EXECUTED "$(jq -cn --arg t "$TASK_ID" --arg a "$GUARD_MATCHED_ACTION" --arg ai "$GUARD_ACTION_AUTH" '{task_id:$t,action:$a,auth_id:$ai}')"
+          python3 "$ORCH_ROOT/bin/owner_auth.py" consume --id "$GUARD_ACTION_AUTH" \
+            --result "executed rc=0 task=$TASK_ID" >> "$TASK_DIR/gate_evidence.txt" 2>&1 || true
         fi
         if [[ $grc -eq 126 ]]; then
           # recoverable shape-deny: исходная команда НЕ исполнена; модель

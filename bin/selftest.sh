@@ -51,7 +51,21 @@ jq -n --arg repo "$REPO" --arg wtr "$SELFTEST_ROOT/worktrees" \
         "mode":"writable",
         "argv":["bash","ops/deploy-demo.sh"],
         "env_from_model":[{"name":"DEMO_SHA","pattern":"^[0-9a-f]{40}$"}],
-        "env_fixed":{"DEMO_FLAG":"from-config"}}}}}' \
+        "env_fixed":{"DEMO_FLAG":"from-config"}},
+        "owner_accept_demo":{
+          "description":"демо owner-action (секция 16)",
+          "mode":"writable",
+          "argv":["bash","ops/owner-demo.sh"],
+          "env_from_model":[{"name":"AG_ACCEPT_SHA","pattern":"^[0-9a-f]{40}$"}],
+          "owner_auth":{"sha_env":"AG_ACCEPT_SHA"},
+          "env_fixed":{"DEMO_MODE":"accept"}},
+        "production_go_demo":{
+          "description":"демо production_go (отдельная auth + prior owner_accept executed)",
+          "mode":"writable",
+          "argv":["bash","ops/owner-demo.sh"],
+          "env_from_model":[{"name":"DEPLOY_SHA","pattern":"^[0-9a-f]{40}$"}],
+          "owner_auth":{"sha_env":"DEPLOY_SHA"},
+          "env_fixed":{"DEMO_MODE":"production"}}}}}' \
   > "$ORCH_TEST_HOME/config/projects.json"
 export ORCH_ROOT="$ORCH_TEST_HOME"
 AGT="$ORCH_TEST_HOME/bin/task.sh"
@@ -1177,6 +1191,102 @@ fixture_result "$MOCKROOT/f_15f.jsonl" '{"action":"result","result":{"task_id":"
 jq '.task_id="SELF-15F"' "$MOCKROOT/t_15e.json" > "$MOCKROOT/t_15f.json"
 stf="$(ORCH_TEST_SHAPE_DENY_MAX=1 run_case "case_15f" "$MOCKROOT/t_15f.json" "$MOCKROOT/f_15f.jsonl")"
 [[ "$stf" == "PERMISSION_VIOLATION" ]] && ok "15f лимит shape-denies исчерпан -> PERMISSION_VIOLATION" || bad "15f status=$stf"
+
+# --- 16: owner-authorized actions + worktree read-форма (OWNER-ACTIONS-1) ----
+DD16="$SELFTEST_ROOT/deploydemo"; DDW16="$SELFTEST_ROOT/worktrees/dd-16"
+cat > "$DD16/ops/owner-demo.sh" <<'EODEMO'
+#!/usr/bin/env bash
+# демо owner-action: идемпотентная state-машина (already-applied)
+if [ -f owner-demo.state ] && grep -q "APPLIED" owner-demo.state; then
+  echo "ALREADY APPLIED (mode=${DEMO_MODE:-?})"
+  exit 0
+fi
+printf 'APPLIED ts=%s mode=%s\n' "$(date -u +%FT%TZ)" "${DEMO_MODE:-?}" > owner-demo.state
+echo "OWNER-DEMO APPLIED (mode=${DEMO_MODE:-?})"
+EODEMO
+chmod +x "$DD16/ops/owner-demo.sh"
+git -C "$DD16" add ops/owner-demo.sh && git -C "$DD16" -c user.email=t@t -c user.name=t commit -qm owner-demo >/dev/null
+git -C "$DD16" worktree add -q "$DDW16" -b dd-16 2>/dev/null || git -C "$DD16" worktree add "$DDW16" -b dd-16 >/dev/null 2>&1 || true
+PA16="$(jq -c '.["deploy-demo"].project_actions' "$ORCH_TEST_HOME/config/projects.json")"
+AUTH16="$SELFTEST_ROOT/auth16"; rm -rf "$AUTH16"; mkdir -p "$AUTH16"
+OA16="python3 $REPO_ROOT/bin/owner_auth.py"
+G16="1111111111111111111111111111111111111111"   # 40 hex
+W16="2222222222222222222222222222222222222222"
+ACC16="AG_ACCEPT_SHA=$G16 bash ops/owner-demo.sh"
+GO16="DEPLOY_SHA=$G16 bash ops/owner-demo.sh"
+export ORCH_AUTH_DIR="$AUTH16" ORCH_PROJECT="deploy-demo" ORCH_PROJECT_ACTIONS="$PA16" GUARD_DENY_ROOTS="/srv/example-prod"
+
+# 16-W: worktree read-форма разрешена, write-формы остаются SECURITY FATAL
+for c in "git worktree list" "git worktree list --porcelain"; do
+  guard_check read_only "$DDW16" "$c" 2>/dev/null && ok "16W allow: $c" || bad "16W DENY: $c"
+  guard_check writable "$DDW16" "$c" 2>/dev/null && ok "16W allow (writable): $c" || bad "16W DENY (writable): $c"
+done
+for c in "git worktree add /tmp/evil16" "git worktree remove $DDW16" "git worktree prune" "git worktree move $DDW16 /tmp/x" "git worktree list; git worktree add /tmp/y"; do
+  run_guarded writable "$DDW16" 10 "$c" "$MOCKROOT/16w.log" 2>/dev/null; r=$?
+  [[ $r -eq 125 ]] && ok "16W FATAL: $c" || bad "16W rc=$r (ожидался 125): $c"
+done
+
+# 16-OA1: точная форма owner-действия без authorization → FATAL с точной причиной
+rm -f "$DDW16/owner-demo.state"
+run_guarded writable "$DDW16" 10 "$ACC16" "$MOCKROOT/16oa1.log" 2>"$MOCKROOT/16oa1.err"; r=$?
+grep -q "owner authorization required" "$MOCKROOT/16oa1.err" 2>/dev/null && [[ $r -eq 125 ]] \
+  && ok "16OA1 deny-причина: authorization required (rc=$r)" || bad "16OA1 rc=$r без точной причины"
+# 16-OA2: authorization чужого проекта не подходит
+$OA16 create --project other-project --action owner_accept_demo --sha "$G16" --source-intake TEST16 >/dev/null 2>&1
+run_guarded writable "$DDW16" 10 "$ACC16" "$MOCKROOT/16oa2.log" 2>/dev/null
+[[ $? -eq 125 ]] && ok "16OA2 чужой project → DENY" || bad "16OA2 чужой project прошёл!"
+# 16-OA3: authorization с другим SHA не подходит
+$OA16 create --project deploy-demo --action owner_accept_demo --sha "$W16" >/dev/null 2>&1
+run_guarded writable "$DDW16" 10 "$ACC16" "$MOCKROOT/16oa3.log" 2>/dev/null
+[[ $? -eq 125 ]] && ok "16OA3 чужой SHA → DENY" || bad "16OA3 чужой SHA прошёл!"
+# 16-GO1: production_go authorization не создаётся без executed owner_accept того же SHA
+$OA16 create --project deploy-demo --action production_go_demo --sha "$G16" --requires-prior-action owner_accept_demo >/dev/null 2>&1 \
+  && bad "16GO1 production_go создан без prior owner_accept!" || ok "16GO1 без prior executed owner_accept — отказ"
+# 16-OA4: валидная authorization + точная форма → ALLOW, исполнение, consume
+$OA16 create --project deploy-demo --action owner_accept_demo --sha "$G16" --source-intake TEST16 >/dev/null
+run_guarded writable "$DDW16" 30 "$ACC16" "$MOCKROOT/16oa4.log" 2>/dev/null; r=$?
+grep -q "OWNER-DEMO APPLIED (mode=accept)" "$MOCKROOT/16oa4.log" 2>/dev/null && grep -q "mode=accept" "$DDW16/owner-demo.state" 2>/dev/null \
+  && [[ $r -eq 0 ]] && ok "16OA4 valid auth → исполнено (mode=accept)" || bad "16OA4 rc=$r"
+$OA16 consume --project deploy-demo --action owner_accept_demo --sha "$G16" --result "unit-test (run_task consume имитируется)" >/dev/null
+$OA16 check --project deploy-demo --action owner_accept_demo --sha "$G16" >/dev/null 2>&1 \
+  && bad "16OA4 authorization не израсходована!" || ok "16OA4 authorization consumed (check=1)"
+# 16-OA5: повтор той же (consumed) authorization → DENY
+run_guarded writable "$DDW16" 10 "$ACC16" "$MOCKROOT/16oa5.log" 2>/dev/null
+[[ $? -eq 125 ]] && ok "16OA5 consumed auth → DENY (нет двойного исполнения)" || bad "16OA5 повтор прошёл!"
+# 16-OA6: свежая authorization + уже применённое состояние → already applied, состояние не переписывается
+before16="$(cat "$DDW16/owner-demo.state" 2>/dev/null)"
+$OA16 create --project deploy-demo --action owner_accept_demo --sha "$G16" >/dev/null 2>&1
+run_guarded writable "$DDW16" 30 "$ACC16" "$MOCKROOT/16oa6.log" 2>/dev/null; r=$?
+grep -q "ALREADY APPLIED" "$MOCKROOT/16oa6.log" 2>/dev/null && [[ "$before16" == "$(cat "$DDW16/owner-demo.state" 2>/dev/null)" ]] \
+  && ok "16OA6 already-applied: без повторного применения" || bad "16OA6 повторно применил (rc=$r)"
+# 16-S: прямой merge/push/deploy-prod/prod-path из executor — по-прежнему FATAL
+for c in "git merge --ff-only $G16" "git push origin main" "bash ops/deploy-prod.sh" "cat /srv/example-prod/secrets/x"; do
+  run_guarded writable "$DDW16" 10 "$c" "$MOCKROOT/16s.log" 2>/dev/null; r=$?
+  [[ $r -eq 125 ]] && ok "16S FATAL: $c" || bad "16S rc=$r (ожидался 125): $c"
+done
+# 16-R: сквозной run_task: consume + audit после успешного owner-действия
+jq -n --argjson checks '[]' --argjson og '[]' \
+  '{project:"deploy-demo", task_id:"SELF-16R", goal:"owner action", risk:"LOW", mode:"writable",
+    allowed_paths:["owner-demo.state"], forbidden_paths:[".env"], bootstrap:[],
+    checks:$checks, owner_gates:$og, cleanup_worktree:true}' > "$MOCKROOT/t_16r.json"
+: > "$MOCKROOT/f_16r.jsonl"
+fixture_shell "$MOCKROOT/f_16r.jsonl" "$ACC16"
+fixture_result "$MOCKROOT/f_16r.jsonl" '{"action":"result","result":{"task_id":"SELF-16R","status":"PASS","summary":"applied","files_changed":["owner-demo.state"],"checks":[],"decisions":[],"assumptions":[],"unresolved":[],"next":"none"}}'
+$OA16 create --project deploy-demo --action owner_accept_demo --sha "$G16" >/dev/null 2>&1
+st16="$(run_case "case_16r" "$MOCKROOT/t_16r.json" "$MOCKROOT/f_16r.jsonl")"
+exe16="$(grep -c '"event":"PROJECT_ACTION_EXECUTED"' "$MOCKROOT/case_16r/log.jsonl" 2>/dev/null || true)"; exe16=${exe16:-0}
+con16="$($OA16 check --project deploy-demo --action owner_accept_demo --sha "$G16" >/dev/null 2>&1; echo $?)"
+[[ "$st16" == "READY_FOR_OWNER_PASS" && "$exe16" -ge 1 && "$con16" -eq 1 ]] \
+  && ok "16R run_task: OWNER_AUTH consumed + audit PROJECT_ACTION_EXECUTED" \
+  || bad "16R status=$st16 executed_events=$exe16 check_rc=$con16"
+# 16-GO2: после executed owner_accept отдельная production_go auth создаётся и исполняется
+$OA16 create --project deploy-demo --action production_go_demo --sha "$G16" --requires-prior-action owner_accept_demo >/dev/null
+run_guarded writable "$DDW16" 30 "$GO16" "$MOCKROOT/16go2.log" 2>/dev/null; r=$?
+grep -q "ALREADY APPLIED (mode=production)" "$MOCKROOT/16go2.log" 2>/dev/null && [[ $r -eq 0 ]] \
+  && ok "16GO2 production_go (отдельная auth) → исполнено" || bad "16GO2 rc=$r"
+
+git -C "$DD16" worktree remove --force "$DDW16" >/dev/null 2>&1 || rm -rf "$DDW16"
+unset ORCH_AUTH_DIR ORCH_PROJECT ORCH_PROJECT_ACTIONS
 
 # --- 10: human-readable owner report (представление; машинный RESULT не меняется) ---
 mk_owner_result() { # dir status extra-json

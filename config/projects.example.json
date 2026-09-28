@@ -43,6 +43,45 @@
           "STAGING_ENV_FILE": "~/src/example-project/.env.staging",
           "STAGING_DATA_DIR": "~/src/example-project/data/staging"
         }
+      },
+      "owner_accept": {
+        "description": "OWNER PASS как проектное действие: ff-only merge принятого SHA в основную ветку + push; только при активной authorization владельца",
+        "mode": "writable",
+        "argv": [
+          "bash",
+          "ops/owner-accept.sh"
+        ],
+        "env_from_model": [
+          {
+            "name": "AG_ACCEPT_SHA",
+            "pattern": "^[0-9a-f]{40}$"
+          }
+        ],
+        "owner_auth": {
+          "sha_env": "AG_ACCEPT_SHA"
+        },
+        "env_fixed": {
+          "AG_MAIN_DIR": "~/src/example-project",
+          "AG_REMOTE": "origin",
+          "AG_BRANCH": "main"
+        }
+      },
+      "production_go": {
+        "description": "OWNER GO как отдельное проектное действие: штатный production deploy точного SHA (требует ОТДЕЛЬНУЮ authorization; guard_roots не ослабляются)",
+        "mode": "writable",
+        "argv": [
+          "bash",
+          "ops/deploy-prod.sh"
+        ],
+        "env_from_model": [
+          {
+            "name": "DEPLOY_SHA",
+            "pattern": "^[0-9a-f]{40}$"
+          }
+        ],
+        "owner_auth": {
+          "sha_env": "DEPLOY_SHA"
+        }
       }
     }
   }
