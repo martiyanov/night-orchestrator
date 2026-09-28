@@ -25,6 +25,16 @@
       "docker/systemctl control"
     ],
     "test_venv_python": "",
+    "release": {
+      "$comment": "PROACTIVE-UX-RELEASE-FLOW-2: детерминированный lifecycle выпуска (bin/release_flow.py). default_step minor|patch; version_files/notes_file+notes_anchor — единственные файлы, которые правит prepare; drift_allow — префиксы путей, допустимые в main после принятого кода (иначе stale); gate_command (null → test_command); push_remote (пусто — не пушить).",
+      "default_step": "minor",
+      "version_files": ["VERSION"],
+      "notes_file": "app/i18n.py",
+      "notes_anchor": "RELEASE_NOTES",
+      "drift_allow": ["state/", "docs/"],
+      "gate_command": null,
+      "push_remote": "origin"
+    },
     "project_actions": {
       "staging_deploy": {
         "description": "штатный staging deploy (production не затрагивается); env_fixed указывает канонические env/данные вне worktree",

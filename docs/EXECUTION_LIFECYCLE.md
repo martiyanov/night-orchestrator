@@ -62,3 +62,29 @@ marker-решение `.owner_decision.json` без git-действий.
 Отчёт (`report.sh`) прикладывает кнопки при `buttons: true`
 (config/report.json) и всегда пишет машинный `report_actions.json`
 (run_id, project, sha, branch, state — основа stale-сверки).
+
+## Lifecycle выпуска (PROACTIVE-UX-RELEASE-FLOW-2, 0.3.0)
+
+`bin/release_flow.py` — детерминированная state machine (состояние ВСЕГДА
+вычисляется из фактов, не из текста):
+
+```
+A DEVELOPMENT → (run: STAGING_READY → приёмка кода owner_accept)
+C CODE_ACCEPTED → D RELEASE_NEEDED --prepare--> E RELEASE_CANDIDATE_READY
+  --accept(exact RC)--> F RELEASE_ACCEPTED → G PRODUCTION_READY (main==RC)
+  --deploy(production_go exact RC)--> H PRODUCTION_DONE
+```
+
+SHA-модель (различаются всегда): accepted_code_sha / main_sha /
+release_candidate_sha / production_sha.
+
+`prepare` — первоклассный примитив подготовки релиза: только release-файлы
+(allowlist), один коммит (VERSION + черновик заметок), канонический gate
+до коммита, идемпотентность, stale-дрейф-контроль (state/, docs/ — можно;
+app-код — STOP до повторной приёмки). Не требует отдельной owner_auth:
+не повышает риск, вызывается только явной командой владельца. Deploy —
+по-прежнему точная авторизация exact RC (release_accept → production_go).
+
+Callback-неймспейс выпуска: `orch1:release-(prepare|accept|deploy|defer|
+details|status):(now|<rc7>|x)` — обрабатывается release_flow.py handle
+(stale/already-safe).

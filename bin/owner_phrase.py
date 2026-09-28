@@ -1,25 +1,24 @@
 #!/usr/bin/env python3
-"""owner_phrase.py — детерминированный маршрутизатор owner-lifecycle фраз
-(PROACTIVE-UX-RELEASE-ROUTING-1).
+"""owner_phrase.py — детерминированный маршрутизатор owner-фраз (v2, PROACTIVE-UX-RELEASE-FLOW-2).
 
-Проблема-класс: явное решение владельца по жизненному циклу («принимаю
-изменения», «влей проверенную версию», «разрешаю выложить в рабочий бот»)
-НЕ является новой задачей. Раньше такая фраза могла быть переформулирована
-LLM в «запусти выпуск …», уйти в intake как обычная RUN-задача и погибнуть
-на guard (либо, хуже, выполнить deploy в автономном прогоне).
+Приоритет обработки сообщения (см. SKILL): 1) callback orch1:*; 2) lifecycle
+owner intent (ЗДЕСЬ); 3) ожидающие уточнения intake; 4) обычный intake.
 
-Здесь — только детерминированные правила (регэкспы явных формулировок +
-structured state: прогоны/authorizations/git), никакого свободного
-парсинга. Выход:
-  INTENT=none      — не lifecycle-фраза: обычный путь intake (как раньше)
-  INTENT=accept    — приёмка: одна candidacy-дуэль → EXECUTE orch1:pass
-  INTENT=deploy    — выкладка: dispatch orch1:deploy / release-flow ответ
-  INTENT=question  — неоднозначно (несколько кандидатов) → вопрос владельцу
-Блок ===EXECUTE=== содержит ТОЧНУЮ команду (агент выполняет её дословно,
-ничего не изобретая); при её отсутствии — только человеческий текст/вопрос.
-Внутренние имена действий владельцу не показываются.
+Intent-набор (явные формулировки; решения — из lifecycle state
+(release_flow/owner_action), не из текста):
+  accept_release — «принимаю релиз», «релиз проверен», «этот релиз принимаю»
+  accept         — «принимаю изменения», «всё проверил, принимаю»,
+                   «влей проверенную версию»
+  prepare        — «готовь релиз», «подготовь релиз/выпуск», «можно готовить
+                   релиз», «сделай релизный коммит»
+  deploy         — «выложи в рабочий бот», «разрешаю выложить»,
+                   «выкатывай в production», «выпускай»
+  none           — обычная задача («запусти X», «разработай …») → intake
 
-Никаких side effects: модуль только читает состояние (runs/auth/git).
+Выход: INTENT=…(+человеческий текст)+блок ===EXECUTE=== с ТОЧНОЙ командой
+(исполнять дословно) либо вопрос. Модуль state-only: side effects только
+внутри EXECUTE-команд (release_flow/owner_action — детерминированные,
+идемпотентные, stale-safe). Внутренние имена действий не показываются.
 """
 from __future__ import annotations
 
@@ -35,17 +34,25 @@ ORCH_ROOT = os.environ.get("ORCH_ROOT") or os.path.join(
 RUNS_DIR = os.environ.get("ORCH_RUNS_DIR") or os.path.join(ORCH_ROOT, "runs")
 AUTH_DIR = os.environ.get("ORCH_AUTH_DIR") or os.path.join(ORCH_ROOT, "authorizations")
 
-# Явные формулировки решений владельца (RU; ложных срабатываний на обычные
-# задачи «запусти/сделай X» нет — маркеры задач в intake отсутствуют здесь).
+ACCEPT_RELEASE_PAT = re.compile(
+    r"(принима(ю|ем|ешь)|принять|принят\w*|подтвержда\w*|проверен\w*|проверил\w*"
+    r"|проверила\w*)[^\n]{0,40}(релиз\w*|выпуск\w*|release)"
+    r"|(релиз\w*|выпуск\w*|release)[^\n]{0,40}(принимаю|принят|проверен)", re.I)
 ACCEPT_PAT = re.compile(
     r"(принима(ю|ем|ешь)|принять|принят\w*)\s+(изменени\w*|версию\w*|результат\w*)"
+    r"|всё\s+проверил\w*[,.]?\s*принимаю"
     r"|влей(те)?\s+\S|влива(й|йте)|слей(те)?\s+\S"
     r"|owner\s*pass", re.I)
+PREPARE_PAT = re.compile(
+    r"(подготовь\w*|готовь\w*|готовим|подготовк\w*|готовить\w*)[^\n]{0,40}"
+    r"(релиз\w*|выпуск\w*|release)"
+    r"|можно\s+готовить\s+релиз|сделай\s+релизный\s+коммит|release\s*prep", re.I)
 DEPLOY_PAT = re.compile(
     r"(выложи\w*|выкладывай|разреша\w*\s+выложить|можно\s+выкладывать"
-    r"|выпусти\w*|публикуй\w*|задеплой\w*|деплой\w*)"
+    r"|выпусти\w*|выпускай\w*|выкатывай\w*|публикуй\w*|задеплой\w*|деплой\w*)"
     r"[^\n]{0,120}(рабоч\w+\s+бот|в\s+прод\w*|production)"
-    r"|owner\s*go|выложить[^\n]{0,120}рабоч\w+\s+бот", re.I)
+    r"|owner\s*go|выложить[^\n]{0,120}рабоч\w+\s+бот"
+    r"|^\s*(выпускай|выкатывай|деплой|задеплой|разрешаю\s+выложить|можно\s+выкладывать)[!.]?\s*$", re.I)
 
 
 def _die(msg):
@@ -53,158 +60,10 @@ def _die(msg):
     sys.exit(2)
 
 
-def _read(path):
-    try:
-        with open(path, encoding="utf-8") as f:
-            return f.read()
-    except OSError:
-        return ""
-
-
-def _load_auths(project):
-    out = []
-    if not os.path.isdir(AUTH_DIR):
-        return out
-    for f in sorted(os.listdir(AUTH_DIR)):
-        if not (f.startswith("AUTH-") and f.endswith(".json")):
-            continue
-        try:
-            a = json.load(open(os.path.join(AUTH_DIR, f), encoding="utf-8"))
-        except Exception:
-            continue
-        if a.get("project") == project:
-            out.append(a)
-    return out
-
-
-def _short(sha):
-    return sha[:7] if sha else "?"
-
-
-def _run_states(project):
-    """[(run_id, state)] по тем же правилам, что owner_action.sh:
-    awaiting_accept (READY_FOR_OWNER_PASS/PASS без решения и без executed
-    accept) и accepted_not_deployed."""
-    awaiting, accepted = [], []
-    if not os.path.isdir(RUNS_DIR):
-        return awaiting, accepted
-    auths = _load_auths(project)
-    accept_sha = {a["sha"] for a in auths
-                  if a.get("action") == _accept_action_name(project)
-                  and a.get("status") == "executed"}
-    deploy_sha = {a["sha"] for a in auths
-                  if a.get("action") == _deploy_action_name(project)
-                  and a.get("status") == "executed"}
-    for rid in sorted(os.listdir(RUNS_DIR)):
-        rdir = os.path.join(RUNS_DIR, rid)
-        if not os.path.isdir(rdir):
-            continue
-        res_path = None
-        for d in sorted(os.listdir(rdir)):
-            p = os.path.join(rdir, d, "RESULT.json")
-            if os.path.isfile(p):
-                res_path = p
-                break
-        if not res_path:
-            continue
-        try:
-            res = json.load(open(res_path, encoding="utf-8"))
-        except Exception:
-            continue
-        tdir = os.path.join(rdir, "tasks")
-        project_ok = False
-        if os.path.isdir(tdir):
-            for tf in sorted(os.listdir(tdir)):
-                if tf.endswith(".json"):
-                    project_ok = project_ok or (
-                        json.load(open(os.path.join(tdir, tf), encoding="utf-8"))
-                        .get("project") == project)
-        if not project_ok:
-            continue
-        st = res.get("status")
-        sha = res.get("commit_sha") or ""
-        if len(sha) != 40:
-            continue
-        if os.path.isfile(os.path.join(rdir, ".owner_decision.json")):
-            continue
-        if st in ("READY_FOR_OWNER_PASS", "PASS") and sha not in accept_sha:
-            awaiting.append((rid, sha))
-        elif sha in accept_sha and sha not in deploy_sha:
-            accepted.append((rid, sha))
-    return awaiting, accepted
-
-
-def _accept_action_name(project):
-    return _registry_role(project, "accept") or "owner_accept"
-
-
-def _deploy_action_name(project):
-    return _registry_role(project, "production") or "production_go"
-
-
-def _registry_role(project, role):
-    reg = os.path.join(ORCH_ROOT, "config", "projects.json")
-    try:
-        acts = json.load(open(reg, encoding="utf-8"))[project].get("project_actions") or {}
-    except Exception:
-        return None
-    for name, spec in acts.items():
-        if isinstance(spec, dict) and spec.get("ux_role") == role:
-            return name
-    return None
-
-
-def _git(repo, *args):
-    try:
-        r = subprocess.run(["git", "-C", repo, *args], capture_output=True,
-                           text=True, timeout=10)
-        return r.stdout.strip() if r.returncode == 0 else ""
-    except Exception:
-        return ""
-
-
-def _release_state(project):
-    """(main_head, last_deployed, release_ready, unreleased_n) — для
-    детерминированного ответа о выкладке без run-контекста."""
-    reg = os.path.join(ORCH_ROOT, "config", "projects.json")
-    try:
-        prof = json.load(open(reg, encoding="utf-8"))[project]
-    except Exception:
-        _die("проект отсутствует в реестре: %s" % project)
-    repo = (prof.get("repo") or "").replace("~", os.path.expanduser("~"))
-    branch = prof.get("default_branch") or "main"
-    main_head = _git(repo, "rev-parse", branch)
-    auths = _load_auths(project)
-    deploys = sorted((a for a in auths
-                      if a.get("action") == _deploy_action_name(project)
-                      and a.get("status") == "executed"),
-                     key=lambda a: a.get("executed_at") or "")
-    last_deployed = deploys[-1]["sha"] if deploys else ""
-    if not main_head:
-        return "", last_deployed, False, 0
-    if main_head == last_deployed:
-        return main_head, last_deployed, True, 0
-    rng = "%s..%s" % (last_deployed, main_head) if last_deployed else ""
-    unreleased = _git(repo, "rev-list", "--count", branch) if not rng else \
-        _git(repo, "rev-list", "--count", rng)
-    try:
-        unreleased_n = int(unreleased or "0")
-    except ValueError:
-        unreleased_n = 0
-    if last_deployed:
-        touched = _git(repo, "log", "-1", "--oneline", rng, "--", "VERSION")
-        version = _read(os.path.join(repo, "VERSION")).strip()
-        notes = _read(os.path.join(repo, "app", "i18n.py"))
-        release_ready = bool(touched) and bool(version) and \
-            ('"%s"' % version) in notes
-    else:
-        release_ready = False
-    return main_head, last_deployed, release_ready, unreleased_n
-
-
 def _emit(intent, text, execute=None):
     print("INTENT=%s" % intent)
-    print(text)
+    if text:
+        print(text)
     if execute:
         print("===EXECUTE===")
         print(execute)
@@ -212,80 +71,245 @@ def _emit(intent, text, execute=None):
     return 0
 
 
+def _rel_state(project):
+    """JSON lifecycle-состояние из release_flow.py (state-only)."""
+    r = subprocess.run(
+        [sys.executable, os.path.join(ORCH_ROOT, "bin", "release_flow.py"),
+         "state", "--project", project, "--json"],
+        capture_output=True, text=True, timeout=60)
+    if r.returncode != 0:
+        return None
+    try:
+        return json.loads(r.stdout)
+    except ValueError:
+        return None
+
+
+def _awaiting_runs(project):
+    """Прогоны в состоянии «ждёт приёмки кода» (owner_action-семантика)."""
+    out = []
+    if not os.path.isdir(RUNS_DIR):
+        return out
+    import glob
+    for rdir in sorted(glob.glob(os.path.join(RUNS_DIR, "*"))):
+        if not os.path.isdir(rdir):
+            continue
+        res = None
+        for rp in sorted(glob.glob(os.path.join(rdir, "*", "RESULT.json"))):
+            res = rp
+            break
+        if not res:
+            continue
+        try:
+            r = json.load(open(res, encoding="utf-8"))
+        except Exception:
+            continue
+        sha = r.get("commit_sha") or ""
+        proj = None
+        for tf in sorted(glob.glob(os.path.join(rdir, "tasks", "*.json"))) + \
+                sorted(glob.glob(os.path.join(rdir, "*", "tasks", "*.json"))):
+            try:
+                proj = json.load(open(tf, encoding="utf-8")).get("project")
+            except Exception:
+                pass
+            if proj:
+                break
+        if proj != project or len(sha) != 40:
+            continue
+        if os.path.isfile(os.path.join(rdir, ".owner_decision.json")):
+            continue
+        if r.get("status") in ("READY_FOR_OWNER_PASS", "PASS"):
+            out.append((os.path.basename(rdir), sha))
+    return out
+
+
+def _accept_sha_executed(project):
+    st = _rel_state(project) or {}
+    return st.get("accepted_code_sha")
+
+
 def handle(text, project):
     low = text.lower()
-    is_accept = bool(ACCEPT_PAT.search(low))
-    is_deploy = bool(DEPLOY_PAT.search(low))
-    if is_accept and is_deploy:
-        return _emit("question",
-                     "Похоже, вы решили и принять изменения, и выложить их в "
-                     "рабочий бот. Это два отдельных шага: сначала приёмка, "
-                     "затем выкладка. Скажите их по очереди.")
-    if not (is_accept or is_deploy):
+    hits = [p for p, pat in (("accept_release", ACCEPT_RELEASE_PAT),
+                             ("accept", ACCEPT_PAT),
+                             ("prepare", PREPARE_PAT),
+                             ("deploy", DEPLOY_PAT)) if pat.search(low)]
+    if not hits:
         return _emit("none", "")
+    if len(hits) > 1:
+        return _emit("question",
+                     "Похоже, здесь несколько решений сразу. Скажите их по "
+                     "одному: сначала приёмка, затем подготовка выпуска, "
+                     "затем выкладка.")
+    intent = hits[0]
+    rel = _rel_state(project) or {}
+    state = rel.get("state")
 
-    if is_accept:
-        awaiting, _ = _run_states(project)
-        if not awaiting:
-            main_head, last_dep, ready, n = _release_state(project)
-            if main_head and main_head != last_dep:
-                return _emit(
-                    "question",
-                    "Ждущих приёмки прогонов нет: изменения TRAINING-PROGRESS-1 "
-                    "уже в основной ветке (staging проверен). Для релиза "
-                    "нужен релизный коммит (VERSION + заметки) — подготовить?")
+    if intent == "accept_release":
+        rc = rel.get("release_candidate_sha")
+        if state == "E" and rc:
+            return _emit(
+                "accept_release",
+                "Принимаю выпуск (коммит %s)." % rc[:7],
+                execute="%s %s/bin/release_flow.py accept --project %s --sha %s"
+                        % (sys.executable, ORCH_ROOT, project, rc[:7]))
+        if state in ("F", "G", "H"):
+            return _emit("accept_release",
+                         "Выпуск уже принят (коммит %s). Скажите «выложи в "
+                         "рабочий бот», чтобы обновить рабочего бота."
+                         % ((rel.get("release_candidate_sha") or "")[:7]))
+        if state == "D":
             return _emit("question",
-                         "Принимать нечего: нет прогонов, ждущих вашей "
-                         "приёмки.")
-        if len(awaiting) > 1:
-            listing = "\n".join("- %s (%s)" % (r, _short(s)) for r, s in awaiting)
-            return _emit("question",
-                         "Ждущих приёмки прогонов несколько — какой принять?\n"
-                         + listing)
-        rid, sha = awaiting[0]
-        return _emit(
-            "accept",
-            "Принимаю: изменения прогона %s вливаются в основную ветку "
-            "(точный коммит %s)." % (rid, _short(sha)),
-            execute="bash %s/bin/owner_action.sh handle orch1:pass:%s" % (ORCH_ROOT, rid))
+                         "Выпуск ещё не подготовлен. Сказать «готовь релиз»?")
+        return _emit("question", "Принимать выпуск нечего: выпуска нет.")
 
-    # deploy intent
-    awaiting, accepted = _run_states(project)
-    main_head, last_dep, ready, n = _release_state(project)
-    sha_line = ("Код, проверенный на staging: %s; текущая основная ветка: %s; "
-                "в рабочем боте: %s."
-                % (_short(accepted[0][1]) if accepted else "—",
-                   _short(main_head), _short(last_dep)))
-    if len(accepted) == 1 and main_head and accepted[0][1] == main_head:
-        rid, sha = accepted[0]
+    if intent == "accept":
+        awaiting = _awaiting_runs(project)
+        if awaiting:
+            if len(awaiting) > 1:
+                listing = "\n".join("- %s (%s)" % (r, s[:7]) for r, s in awaiting)
+                return _emit("question",
+                             "Ждущих приёмки прогонов несколько — какой "
+                             "принять?\n" + listing)
+            rid, sha = awaiting[0]
+            return _emit(
+                "accept",
+                "Принимаю: изменения прогона %s вливаются в основную ветку "
+                "(точный коммит %s)." % (rid, sha[:7]),
+                execute="bash %s/bin/owner_action.sh handle orch1:pass:%s"
+                        % (ORCH_ROOT, rid))
+        if state == "D":
+            return _emit("question",
+                         "Прогонов в приёмке нет: принятый код уже в основной "
+                         "ветке. Дальше — подготовка выпуска («готовь релиз»).")
+        if state in ("E", "F", "G", "H"):
+            return _emit("question",
+                         "Принимать код уже нечего — он в основной ветке. "
+                         "Текущий шаг выпуска подскажет «статус выпуска».")
+        return _emit("question", "Принимать нечего: нет прогонов, ждущих "
+                                 "вашей приёмки.")
+
+    if intent == "prepare":
+        awaiting = _awaiting_runs(project)
+        if awaiting:
+            return _emit("question",
+                         "Сначала приёмка: есть прогон(ы), ждущие вашего "
+                         "решения по коду. Подготовка выпуска — после неё.")
+        if state == "D":
+            return _emit(
+                "prepare",
+                "Готовлю выпуск из принятого кода (%s): один релизный коммит "
+                "(версия + черновик заметок), канонические проверки, точный "
+                "SHA выпуска. Рабочий бот не трогаю."
+                % (rel.get("accepted_code_sha") or "")[:7],
+                execute="%s %s/bin/release_flow.py prepare --project %s"
+                        % (sys.executable, ORCH_ROOT, project))
+        if state in ("E", "F", "G"):
+            rc = rel.get("release_candidate_sha") or ""
+            nxt = "Принять выпуск?" if state == "E" else \
+                "Выпуск принят — «выложи в рабочий бот»."
+            return _emit("prepare",
+                         "Выпуск уже подготовлен (коммит %s). %s"
+                         % (rc[:7], nxt))
+        if state == "H":
+            return _emit("prepare",
+                         "Всё выпущено и работает в рабочем боте — готовить "
+                         "нечего.")
+        return _emit("question",
+                     "Готовить выпуск нечего: нет принятого кода после "
+                     "последнего выпуска.")
+
+    # deploy
+    rc = rel.get("release_candidate_sha")
+    if state == "G" and rc:
         return _emit(
             "deploy",
-            "Выкладываю принятую версию %s в рабочий бот.\n%s"
-            % (_short(sha), sha_line),
-            execute="bash %s/bin/owner_action.sh handle orch1:deploy:%s"
-                    % (ORCH_ROOT, rid))
-    if main_head and last_dep and main_head != last_dep and not ready:
-        return _emit(
-            "question",
-            "В основной ветке есть невыпущенные изменения (%d коммитов), но "
-            "релизного коммита (VERSION + заметки) ещё нет — выкладывать "
-            "поэтому пока нечего. Подтвердите — подготовлю релизный коммит "
-            "контролируемым релиз-флоу (не автономным прогоном).\n%s"
-            % (n, sha_line))
-    if main_head and main_head == last_dep:
+            "Выкладываю принятый выпуск (коммит %s) в рабочий бот."
+            % rc[:7],
+            execute="%s %s/bin/release_flow.py deploy --project %s --sha %s"
+                    % (sys.executable, ORCH_ROOT, project, rc[:7]))
+    if state == "F":
         return _emit("question",
-                     "В рабочем боте уже текущая версия основной ветки (%s) — "
-                     "выкладывать нечего." % _short(main_head))
-    if accepted:
-        return _emit(
-            "question",
-            "Принятая версия (%s) не совпадает с текущей основной веткой "
-            "(%s) — предложение могло устареть. Скажите «статус» — покажу "
-            "актуальное состояние." % (_short(accepted[0][1]), _short(main_head)))
-    return _emit(
-        "question",
-        "Выкладывать можно только принятую версию: приёмки ещё не было.\n%s"
-        % sha_line)
+                     "Выпуск принят, но основная ветка ушла вперёд — "
+                     "выкладывать нельзя. Скажите «статус выпуска».")
+    if state == "E":
+        return _emit("question",
+                     "Выпуск подготовлен (коммит %s), но ещё не принят. "
+                     "Сначала «принимаю релиз»." % (rc or "")[:7])
+    if state == "D":
+        return _emit("question",
+                     "Сначала подготовить выпуск («готовь релиз»), принять "
+                     "его — затем выкладка.")
+    if state == "H":
+        return _emit("deploy",
+                     "В рабочем боте уже текущий выпуск — выкладывать нечего.")
+    # проект без release-конфигурации: старый run-путь owner_action
+    awaiting, accepted = _legacy_accepted(project)
+    if len(accepted) == 1:
+        rid, sha = accepted[0]
+        main_sha = rel.get("main_sha")
+        if main_sha and sha == main_sha:
+            return _emit(
+                "deploy",
+                "Выкладываю принятую версию %s в рабочий бот." % sha[:7],
+                execute="bash %s/bin/owner_action.sh handle orch1:deploy:%s"
+                        % (ORCH_ROOT, rid))
+    if awaiting:
+        return _emit("question", "Сначала приёмка кода — выкладывать можно "
+                                 "только принятую версию.")
+    return _emit("question", "Выкладывать можно только принятую версию: "
+                             "приёмки ещё не было.")
+
+
+def _legacy_accepted(project):
+    """run-поток для проектов без release-конфига (семантика owner_action)."""
+    awaiting = _awaiting_runs(project)
+    accepted = []
+    if not os.path.isdir(AUTH_DIR):
+        return awaiting, accepted
+    reg = os.path.join(ORCH_ROOT, "config", "projects.json")
+    try:
+        prof = json.load(open(reg, encoding="utf-8"))[project]
+    except Exception:
+        return awaiting, accepted
+    acc_name = next((n for n, s in (prof.get("project_actions") or {}).items()
+                     if isinstance(s, dict) and s.get("ux_role") == "accept"),
+                    "owner_accept")
+    dep_name = next((n for n, s in (prof.get("project_actions") or {}).items()
+                     if isinstance(s, dict) and s.get("ux_role") == "production"),
+                    "production_go")
+    acc_sha = {a["sha"] for a in map(_load, _auth_files()) if a and
+               a.get("project") == project and a.get("action") == acc_name and
+               a.get("status") == "executed"}
+    dep_sha = {a["sha"] for a in map(_load, _auth_files()) if a and
+               a.get("project") == project and a.get("action") == dep_name and
+               a.get("status") == "executed"}
+    import glob
+    for rdir in sorted(glob.glob(os.path.join(RUNS_DIR, "*"))):
+        res = next(iter(sorted(glob.glob(os.path.join(rdir, "*", "RESULT.json")))), None)
+        if not res:
+            continue
+        try:
+            r = json.load(open(res, encoding="utf-8"))
+        except Exception:
+            continue
+        sha = r.get("commit_sha") or ""
+        if len(sha) == 40 and sha in acc_sha and sha not in dep_sha:
+            accepted.append((os.path.basename(rdir), sha))
+    return awaiting, accepted
+
+
+def _auth_files():
+    import glob
+    return sorted(glob.glob(os.path.join(AUTH_DIR, "AUTH-*.json"))) \
+        if os.path.isdir(AUTH_DIR) else []
+
+
+def _load(p):
+    try:
+        return json.load(open(p, encoding="utf-8"))
+    except Exception:
+        return None
 
 
 def main():

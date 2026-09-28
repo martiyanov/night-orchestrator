@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.3.0
+
+- **Полный lifecycle выпуска** (PROACTIVE-UX-RELEASE-FLOW-2):
+  `bin/release_flow.py` — детерминированная state machine A–H
+  (DEVELOPMENT → STAGING_READY → CODE_ACCEPTED → RELEASE_NEEDED →
+  RELEASE_CANDIDATE_READY → RELEASE_ACCEPTED → PRODUCTION_READY →
+  PRODUCTION_DONE), вычисляемая ТОЛЬКО из structured state
+  (authorizations/git/registry). Явная SHA-модель: accepted_code_sha /
+  main_sha / release_candidate_sha / production_sha — не взаимозаменяемы.
+- **PREPARE_RELEASE — первоклассный детерминированный примитив** (не
+  project_action executor'а и не coding-задача): только из RELEASE_NEEDED;
+  правит ТОЛЬКО release-файлы (version_files + notes_file по якорю);
+  allowlist-дрейф main после принятого кода (иначе STALE-STOP); грязное
+  дерево/не та ветка — STOP; канонический gate ДО коммита (провал —
+  файлы восстанавливаются); ровно один release-коммит (VERSION bump по
+  default_step + черновик заметок из --task-id/--notes-*); push_remote;
+  идемпотентен (готовый RC не пересоздаётся); возвращает exact RC SHA;
+  production не трогает. Отдельная owner_auth не требуется: примитив не
+  повышает риск (release-файлы, обратим одним коммитом) и запускается
+  только явной командой владельца через deterministic-слой.
+- **accept/deploy выпуска**: accept = release_accept-авторизация exact RC
+  (owner_auth create+consume); deploy = production_go exact RC (prior
+  release_accept + main==RC + registry-argv + env_fixed + аудит
+  release_log.jsonl; провал не расходует разрешение).
+- **owner_phrase v2**: полный intent-набор (принять изменения/всё проверил/
+  влей; готовь|подготовь релиз|выпуск/можно готовить/сделай релизный
+  коммит; принимаю релиз/релиз проверен; выложи в рабочий бот/разрешаю
+  выложить/выкатывай в production/выпускай); решения — из lifecycle state
+  (release_flow) + run-состояний; комбинированная фраза → «по одному»;
+  обычные задачи → INTENT=none (intake). owner_action: NEXT_OFFER после
+  приёмки — «Нужно подготовить выпуск» [📦][⏸][📋] для проектов с
+  release-конфигом (registry `release`-блок: default_step/version_files/
+  notes_file+anchor/drift_allow/gate_command/push_remote).
+- Мотив-инциденты: «разрешаю выложить…» и «готовь релиз…» уходили в
+  autonomous coding-run и погибали на guard (cat ops/deploy-prod.sh —
+  deny `(^|[space])\./`; find *release*). Guard НЕ менялся и НЕ ослаблялся.
+- Самопроверка: секция 20 (TEST 1–9): happy-path принимаю→готовь→принимаю
+  релиз→выложи с ZERO coding-runs; повтор prepare — один коммит; app-дрейф
+  → stale; старый RC-токен → stale; несколько кандидатов → вопрос; кнопка ≡
+  фраза; guard FATAL; §5-фразы не создают PODGOTOV/ZAPUSTI-ранов. Итог
+  локально: full 441/3 (8b/9a/9c — прежнее окружение; CI — авторитет).
+
 ## 0.2.2
 
 - **Owner-lifecycle фразы — детерминированный маршрутизатор**

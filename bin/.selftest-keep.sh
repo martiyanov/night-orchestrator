@@ -461,8 +461,8 @@ fi
 
 # =========================================================================
 echo; echo "== 6. mock scenarios (run_task.sh) =="
-MOCKROOT="$(mktemp -d /tmp/no_selftest.XXXXXX)"
-trap 'rm -rf "$MOCKROOT"' EXIT
+MOCKROOT="$HOME/.cache/rf-mock"; mkdir -p "$MOCKROOT"
+# keep
 # автономные/selftest-прогоны не ходят в Telegram (report строится, не шлётся)
 export ORCH_TEST_NO_SEND=1
 
@@ -1859,13 +1859,11 @@ RF20 state --json | grep -q '"state": "G"' && ok "20e-3 state=G (PRODUCTION_READ
 # 20f (TEST 1, G→H): «выложи в рабочий бот» → deploy exact RC; H; runs пуст всё ещё
 PH20 "выложи в рабочий бот" > "$MOCKROOT/p20f.txt"
 bash -c "$(exec20 "$MOCKROOT/p20f.txt")" > "$MOCKROOT/rel20f.txt" 2>&1
-f1=0; f2=0; f3=0; f4=0
-grep -q "работает в рабочем боте" "$MOCKROOT/rel20f.txt" && f1=1
-jq -se --arg s "$RC20" 'map(select(.action=="production_go_demo" and .sha==$s and .status=="executed")) | length > 0' "$ORCH_AUTH_DIR"/AUTH-*.json >/dev/null 2>&1 && f2=1
-RF20 state --json | grep -q '"state": "H"' && f3=1
-[[ "$(runs20cnt)" == "0" ]] && f4=1
-[[ $f1 -eq 1 && $f2 -eq 1 && $f3 -eq 1 && $f4 -eq 1 ]] \
-  && ok "20f deploy exact RC → H; ZERO coding-runs на всём пути" || bad "20f deploy/H f=$f1$f2$f3$f4 rc=$RC20"
+grep -q "работает в рабочем боте" "$MOCKROOT/rel20f.txt" \
+  && OA20 list --all | jq -e --arg s "$RC20" 'select(.action=="production_go_demo" and .sha==$s and .status=="executed")' >/dev/null \
+  && RF20 state --json | grep -q '"state": "H"' \
+  && [[ "$(runs20cnt)" == "0" ]] \
+  && ok "20f deploy exact RC → H; ZERO coding-runs на всём пути" || bad "20f deploy/H"
 
 # 20g (TEST 4): старый RC-токен после смены кандидата → stale
 S20B="$(mk20commit code-b)"

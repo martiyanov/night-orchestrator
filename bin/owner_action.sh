@@ -318,7 +318,18 @@ cmd_pass() {
   fi
   run_owner_action "$ACCEPT_NAME" "$SHA" 1 "" "$RUN_ID" "orch1:pass:$RUN_ID" || return 1
   echo "Изменения добавлены в основную версию."
-  if [ -n "$PROD_NAME" ]; then
+  if [ -n "$PROD_NAME" ] && jq -e --arg p "$PROJECT" '(.[$p].release // null) != null' "$REG" >/dev/null 2>&1; then
+    # PROACTIVE-UX-RELEASE-FLOW-2: следующий шаг — подготовка выпуска
+    # (state machine выпуска в release_flow.py), не непосредственный deploy
+    echo
+    echo "Нужно подготовить выпуск."
+    echo "===NEXT_OFFER==="
+    jq -cn '{text:"Изменения приняты.\n\nНужно подготовить выпуск.", buttons:[
+      {label:"📦 Подготовить выпуск", callback_data:"orch1:release-prepare:now"},
+      {label:"⏸ Позже", callback_data:"orch1:release-defer:x"},
+      {label:"📋 Подробнее", callback_data:"orch1:release-details:x"}]}'
+    echo "===END_OFFER==="
+  elif [ -n "$PROD_NAME" ]; then
     echo
     echo "Выложить их в рабочий бот?"
     offer_block "Изменения добавлены в основную версию.
