@@ -36,7 +36,18 @@ jobs:
       - name: secret scan
         run: ./scripts/secret-scan.sh
       - name: selftest (default)
-        run: ./bin/selftest.sh
+        run: |
+          set -o pipefail
+          ./bin/selftest.sh 2>&1 | tee /tmp/selftest-default.log || code=$?
+          grep "FAIL:" /tmp/selftest-default.log | while IFS= read -r line; do
+            echo "::error::DEF: ${line:0:250}"
+          done
+          if [ "${code:-0}" != "0" ] && ! grep -q "FAIL:" /tmp/selftest-default.log; then
+            tail -n 40 /tmp/selftest-default.log | while IFS= read -r line; do
+              echo "::error::DEF-TAIL: ${line:0:250}"
+            done
+          fi
+          exit ${code:-0}
       - name: selftest (full)
         run: |
           set -o pipefail
