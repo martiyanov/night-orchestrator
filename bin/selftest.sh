@@ -1880,6 +1880,7 @@ grep -q "Изменения приняты" "$MOCKROOT/rel20l.txt" && grep -q "�
   && ok "20l-2 accept-main исполнен → D (offer подготовки выпуска)" || bad "20l-2 accept-main exec"
 
 # 20g (TEST 4): старый RC-токен после смены кандидата → stale
+sleep 1  # детерминированный executed_at (не в одну секунду с 20l)
 S20B="$(mk20commit code-b)"
 OA20 create --project deploy-demo --action owner_accept_demo --sha "$S20B" >/dev/null
 OA20 consume --project deploy-demo --action owner_accept_demo --sha "$S20B" --result "accepted" >/dev/null
